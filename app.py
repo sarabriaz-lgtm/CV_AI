@@ -15,25 +15,13 @@ from docx import Document
 
 st.set_page_config(
     page_title="HireTech AI",
-    page_icon="👷",
+    page_icon="🤖",
     layout="wide"
 )
 
 
 # ============================================================
-# APPLICATION TITLE
-# ============================================================
-
-st.title("👷 HireTech AI")
-st.subheader("AI-Powered Hydrologist Recruitment & Candidate Ranking")
-st.caption(
-    "Upload candidate CVs, compare them against Hydrologist job requirements, "
-    "and automatically rank candidates using AI-assisted analysis."
-)
-
-
-# ============================================================
-# DEFAULT HYDROLOGIST JOB DESCRIPTION
+# DEFAULT JOB DESCRIPTION
 # ============================================================
 
 DEFAULT_JOB_DESCRIPTION = """
@@ -75,39 +63,17 @@ or related water resources projects will be considered valuable.
 
 
 # ============================================================
-# DEFAULT HYDROLOGIST KEYWORDS
+# DEFAULT KEYWORDS
 # ============================================================
 
-DEFAULT_HYDROLOGIST_KEYWORDS = (
-    "Hydrology, "
-    "Hydrologist, "
-    "Water Resources, "
-    "HEC-HMS, "
-    "HEC-RAS, "
-    "SWMM, "
-    "ArcGIS, "
-    "QGIS, "
-    "GIS, "
-    "Hydrologic Modeling, "
-    "Hydraulic Modeling, "
-    "Rainfall-Runoff Modeling, "
-    "Watershed, "
-    "Catchment, "
-    "Flood Modeling, "
-    "Flood Frequency Analysis, "
-    "Flood Risk Assessment, "
-    "Drainage, "
-    "Stormwater, "
-    "River Basin, "
-    "Precipitation, "
-    "Streamflow, "
-    "SCS-CN, "
-    "Unit Hydrograph, "
-    "IDF Curves, "
-    "Water Balance, "
-    "Groundwater, "
-    "Watershed Management, "
-    "Water Resources Management"
+DEFAULT_KEYWORDS = (
+    "Hydrology, Hydrologist, Water Resources, HEC-HMS, HEC-RAS, "
+    "SWMM, ArcGIS, QGIS, GIS, Hydrologic Modeling, Hydraulic Modeling, "
+    "Rainfall-Runoff Modeling, Watershed, Catchment, Flood Modeling, "
+    "Flood Frequency Analysis, Flood Risk Assessment, Drainage, "
+    "Stormwater, River Basin, Precipitation, Streamflow, SCS-CN, "
+    "Unit Hydrograph, IDF Curves, Water Balance, Groundwater, "
+    "Watershed Management, Water Resources Management"
 )
 
 
@@ -115,60 +81,178 @@ DEFAULT_HYDROLOGIST_KEYWORDS = (
 # SESSION STATE
 # ============================================================
 
-if "candidates" not in st.session_state:
-    st.session_state.candidates = []
+defaults = {
+    "candidates": [],
+    "analysis_errors": [],
+    "job_title": "Hydrologist",
+    "min_experience": 0,
+    "required_keywords": DEFAULT_KEYWORDS,
+    "job_description": DEFAULT_JOB_DESCRIPTION,
+    "weight_experience": 30,
+    "weight_technical": 25,
+    "weight_education": 15,
+    "weight_requirements": 20,
+    "weight_certification": 10,
+}
 
-if "analysis_errors" not in st.session_state:
-    st.session_state.analysis_errors = []
-
-if "job_title" not in st.session_state:
-    st.session_state.job_title = "Hydrologist"
-
-if "min_experience" not in st.session_state:
-    st.session_state.min_experience = 0
-
-if "required_keywords" not in st.session_state:
-    st.session_state.required_keywords = DEFAULT_HYDROLOGIST_KEYWORDS
-
-if "job_description" not in st.session_state:
-    st.session_state.job_description = DEFAULT_JOB_DESCRIPTION
-
-if "weight_experience" not in st.session_state:
-    st.session_state.weight_experience = 30
-
-if "weight_technical" not in st.session_state:
-    st.session_state.weight_technical = 25
-
-if "weight_education" not in st.session_state:
-    st.session_state.weight_education = 15
-
-if "weight_requirements" not in st.session_state:
-    st.session_state.weight_requirements = 20
-
-if "weight_certification" not in st.session_state:
-    st.session_state.weight_certification = 10
+for key, value in defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
 
 
 # ============================================================
-# GROQ API CONFIGURATION
+# GROQ CONFIGURATION
 # ============================================================
 
 def get_groq_api_key():
-
     try:
-        return str(
-            st.secrets["GROQ_API_KEY"]
-        ).strip()
-
+        return str(st.secrets["GROQ_API_KEY"]).strip()
     except Exception:
         return ""
 
 
 api_key = get_groq_api_key()
 
-# Internal model.
-# Recruiter does not see or change this.
+# Internal model — recruiter does not see this
 GROQ_MODEL = "openai/gpt-oss-20b"
+
+
+# ============================================================
+# LEFT SIDEBAR
+# ============================================================
+
+with st.sidebar:
+
+    st.title("⚙️ HireTech AI")
+
+    st.markdown("### 📖 Instructions")
+
+    st.markdown("""
+    **1. Select the role**
+    
+    The application starts with a sample Hydrologist vacancy.
+    You can change the job title for any recruitment position.
+
+    **2. Review keywords**
+    
+    Default keywords are provided according to the sample vacancy.
+    Add, remove, or change keywords as required.
+
+    **3. Review the job description**
+    
+    A complete job description is provided by default.
+    You can edit it for a specific vacancy.
+
+    **4. Set minimum experience**
+    
+    Enter the minimum relevant experience required for the role.
+
+    **5. Set scoring weightage**
+    
+    Adjust the importance of:
+    - Experience
+    - Technical Skills
+    - Education
+    - Job Requirements
+    - Certifications
+
+    **6. Upload CVs**
+    
+    Upload multiple PDF or DOCX CVs.
+
+    **7. Analyze candidates**
+    
+    HireTech AI extracts candidate information, checks the CVs against
+    the requirements, identifies matched and missing keywords, and
+    calculates candidate scores.
+
+    **8. Review results**
+    
+    Compare candidates, inspect individual profiles, review score
+    breakdowns, and export the results to Excel.
+    """)
+
+    st.divider()
+
+    st.subheader("⚖️ Scoring Weightage")
+
+    st.caption(
+        "Adjust the importance of each factor. "
+        "The total does not have to equal 100%; scores are normalized automatically."
+    )
+
+    st.slider(
+        "Experience",
+        min_value=0,
+        max_value=100,
+        value=30,
+        key="weight_experience"
+    )
+
+    st.slider(
+        "Technical Skills",
+        min_value=0,
+        max_value=100,
+        value=25,
+        key="weight_technical"
+    )
+
+    st.slider(
+        "Education",
+        min_value=0,
+        max_value=100,
+        value=15,
+        key="weight_education"
+    )
+
+    st.slider(
+        "Job Requirements",
+        min_value=0,
+        max_value=100,
+        value=20,
+        key="weight_requirements"
+    )
+
+    st.slider(
+        "Certifications",
+        min_value=0,
+        max_value=100,
+        value=10,
+        key="weight_certification"
+    )
+
+    total_weight = (
+        st.session_state.weight_experience
+        + st.session_state.weight_technical
+        + st.session_state.weight_education
+        + st.session_state.weight_requirements
+        + st.session_state.weight_certification
+    )
+
+    st.metric(
+        "Total Weight",
+        f"{total_weight}%"
+    )
+
+    if total_weight == 100:
+        st.success("Weightage totals 100%")
+    else:
+        st.info(
+            "Weights are automatically normalized when calculating the final score."
+        )
+
+
+# ============================================================
+# MAIN HEADER
+# ============================================================
+
+st.title("🤖 HireTech AI")
+st.subheader("AI-Powered Recruitment & Candidate Ranking")
+
+st.caption(
+    "Analyze CVs against job requirements, compare candidates, "
+    "identify strengths and gaps, and generate a ranked recruitment report."
+)
 
 
 # ============================================================
@@ -176,10 +260,6 @@ GROQ_MODEL = "openai/gpt-oss-20b"
 # ============================================================
 
 def safe_string(value):
-    """
-    Convert any value into a readable string.
-    Handles dictionaries, lists and normal strings.
-    """
 
     if value is None:
         return ""
@@ -194,33 +274,27 @@ def safe_string(value):
         for key, val in value.items():
 
             if val is not None and str(val).strip():
-
-                parts.append(
-                    f"{key}: {val}"
-                )
+                parts.append(f"{key}: {val}")
 
         return ", ".join(parts)
 
     if isinstance(value, list):
 
-        values = []
+        parts = []
 
         for item in value:
 
             text = safe_string(item)
 
             if text:
-                values.append(text)
+                parts.append(text)
 
-        return ", ".join(values)
+        return ", ".join(parts)
 
     return str(value).strip()
 
 
 def safe_list(value):
-    """
-    Always return a clean list of readable strings.
-    """
 
     if value is None:
         return []
@@ -239,37 +313,28 @@ def safe_list(value):
         return result
 
     if isinstance(value, dict):
-
         return [safe_string(value)]
 
     if isinstance(value, str):
 
-        if value.strip():
-            return [value.strip()]
-
-        return []
+        return [value.strip()] if value.strip() else []
 
     return [str(value)]
 
 
 def safe_join(value, separator=", "):
-
-    return separator.join(
-        safe_list(value)
-    )
+    return separator.join(safe_list(value))
 
 
 # ============================================================
-# FILE EXTRACTION
+# FILE TEXT EXTRACTION
 # ============================================================
 
 def extract_pdf_text(uploaded_file):
 
     uploaded_file.seek(0)
 
-    reader = PdfReader(
-        uploaded_file
-    )
+    reader = PdfReader(uploaded_file)
 
     pages = []
 
@@ -292,22 +357,15 @@ def extract_docx_text(uploaded_file):
 
     uploaded_file.seek(0)
 
-    document = Document(
-        uploaded_file
-    )
+    document = Document(uploaded_file)
 
     paragraphs = []
 
-    # Normal paragraphs
     for paragraph in document.paragraphs:
 
         if paragraph.text.strip():
+            paragraphs.append(paragraph.text)
 
-            paragraphs.append(
-                paragraph.text
-            )
-
-    # Tables
     for table in document.tables:
 
         for row in table.rows:
@@ -317,16 +375,10 @@ def extract_docx_text(uploaded_file):
             for cell in row.cells:
 
                 if cell.text.strip():
-
-                    row_text.append(
-                        cell.text.strip()
-                    )
+                    row_text.append(cell.text.strip())
 
             if row_text:
-
-                paragraphs.append(
-                    " | ".join(row_text)
-                )
+                paragraphs.append(" | ".join(row_text))
 
     return "\n".join(paragraphs)
 
@@ -336,16 +388,10 @@ def extract_text(uploaded_file):
     file_name = uploaded_file.name.lower()
 
     if file_name.endswith(".pdf"):
-
-        return extract_pdf_text(
-            uploaded_file
-        )
+        return extract_pdf_text(uploaded_file)
 
     if file_name.endswith(".docx"):
-
-        return extract_docx_text(
-            uploaded_file
-        )
+        return extract_docx_text(uploaded_file)
 
     return ""
 
@@ -362,20 +408,14 @@ def normalize_text(text):
     text = text.replace("—", "-")
     text = text.replace("’", "'")
 
-    text = re.sub(
-        r"\s+",
-        " ",
-        text
-    )
+    text = re.sub(r"\s+", " ", text)
 
     return text.strip()
 
 
 def normalize_keyword(keyword):
 
-    keyword = normalize_text(
-        keyword
-    )
+    keyword = normalize_text(keyword)
 
     keyword = re.sub(
         r"\s+",
@@ -392,15 +432,10 @@ def normalize_keyword(keyword):
 
 def get_keyword_variants(keyword):
 
-    keyword = normalize_keyword(
-        keyword
-    )
+    keyword = normalize_keyword(keyword)
 
-    variants = {
-        keyword
-    }
+    variants = {keyword}
 
-    # Common hydrology variations
     replacements = {
 
         "hec hms": [
@@ -467,21 +502,6 @@ def get_keyword_variants(keyword):
             "storm water"
         ],
 
-        "water resources": [
-            "water resources",
-            "water-resource"
-        ],
-
-        "watershed": [
-            "watershed",
-            "catchment"
-        ],
-
-        "catchment": [
-            "catchment",
-            "watershed"
-        ],
-
         "streamflow": [
             "streamflow",
             "stream flow"
@@ -489,10 +509,7 @@ def get_keyword_variants(keyword):
     }
 
     if keyword in replacements:
-
-        variants.update(
-            replacements[keyword]
-        )
+        variants.update(replacements[keyword])
 
     return list(variants)
 
@@ -501,72 +518,47 @@ def get_keyword_variants(keyword):
 # KEYWORD MATCHING
 # ============================================================
 
-def find_keywords_in_cv(
-    cv_text,
-    required_keywords
-):
+def find_keywords_in_cv(cv_text, required_keywords):
 
-    normalized_cv = normalize_text(
-        cv_text
-    )
+    normalized_cv = normalize_text(cv_text)
 
     matched = []
     missing = []
 
     for keyword in required_keywords:
 
-        keyword = normalize_keyword(
-            keyword
-        )
+        keyword = normalize_keyword(keyword)
 
         if not keyword:
             continue
 
-        variants = get_keyword_variants(
-            keyword
-        )
+        variants = get_keyword_variants(keyword)
 
         found = False
 
         for variant in variants:
 
             if variant in normalized_cv:
-
                 found = True
                 break
 
         if found:
-
-            matched.append(
-                keyword
-            )
-
+            matched.append(keyword)
         else:
-
-            missing.append(
-                keyword
-            )
+            missing.append(keyword)
 
     return matched, missing
 
 
-def keyword_score(
-    matched,
-    required_keywords
-):
+def keyword_score(matched, required_keywords):
 
-    total = len(
-        required_keywords
-    )
+    total = len(required_keywords)
 
     if total == 0:
         return 0
 
     return round(
-        (
-            len(matched) /
-            total
-        ) * 100,
+        (len(matched) / total) * 100,
         2
     )
 
@@ -575,16 +567,13 @@ def keyword_score(
 # JSON CLEANING
 # ============================================================
 
-def clean_json_response(
-    response_text
-):
+def clean_json_response(response_text):
 
     if not response_text:
         return None
 
     text = response_text.strip()
 
-    # Remove markdown code fences
     text = re.sub(
         r"```json",
         "",
@@ -600,25 +589,12 @@ def clean_json_response(
 
     text = text.strip()
 
-    # Extract JSON object
-    first_brace = text.find(
-        "{"
-    )
+    first_brace = text.find("{")
+    last_brace = text.rfind("}")
 
-    last_brace = text.rfind(
-        "}"
-    )
+    if first_brace != -1 and last_brace != -1:
+        text = text[first_brace:last_brace + 1]
 
-    if (
-        first_brace != -1
-        and last_brace != -1
-    ):
-
-        text = text[
-            first_brace:last_brace + 1
-        ]
-
-    # Remove control characters
     text = re.sub(
         r"[\x00-\x08\x0B\x0C\x0E-\x1F]",
         "",
@@ -626,34 +602,18 @@ def clean_json_response(
     )
 
     try:
-
-        return json.loads(
-            text
-        )
+        return json.loads(text)
 
     except json.JSONDecodeError:
 
-        # Try simple repair
         repaired = text
 
-        repaired = repaired.replace(
-            "\n",
-            " "
-        )
-
-        repaired = repaired.replace(
-            "\t",
-            " "
-        )
+        repaired = repaired.replace("\n", " ")
+        repaired = repaired.replace("\t", " ")
 
         try:
-
-            return json.loads(
-                repaired
-            )
-
+            return json.loads(repaired)
         except Exception:
-
             return None
 
 
@@ -661,10 +621,7 @@ def clean_json_response(
 # AI CV ANALYSIS
 # ============================================================
 
-def analyze_cv(
-    cv_text,
-    job_description
-):
+def analyze_cv(cv_text, job_description):
 
     if not api_key:
 
@@ -677,15 +634,13 @@ def analyze_cv(
     )
 
     prompt = f"""
-You are an expert HR recruitment assistant specializing in Hydrology,
-Water Resources Engineering, and environmental engineering recruitment.
+You are an expert HR recruitment assistant.
 
-Analyze the candidate CV against the job description.
+Analyze the candidate CV against the job vacancy below.
 
-Return ONLY valid JSON.
-
-Do not add markdown.
-Do not add explanations outside JSON.
+The application is designed for recruitment across different professional
+roles. Analyze the candidate according to the actual job title, keywords,
+and job description provided.
 
 JOB TITLE:
 {st.session_state.job_title}
@@ -696,7 +651,9 @@ JOB DESCRIPTION:
 CANDIDATE CV:
 {cv_text}
 
-Return exactly this JSON structure:
+Return ONLY valid JSON.
+
+Return exactly this structure:
 
 {{
     "candidate_name": "",
@@ -719,35 +676,32 @@ Extract the candidate's full name.
 2. education:
 Return readable education entries.
 Example:
-"M.Sc. Hydrology - University of XYZ - 2023"
+"M.Sc. Civil Engineering - University of XYZ - 2023"
 
 3. years_relevant_experience:
-Estimate relevant professional Hydrology,
-Water Resources, Hydraulic, Hydrologic or closely related experience.
-Return only a number.
+Estimate relevant professional experience for this job.
+Return a number.
 
 4. previous_roles:
 List previous job titles and organizations.
 
 5. technical_skills:
-List relevant hydrology, hydraulics, water resources,
-GIS, modeling, engineering and analytical skills.
+List technical skills relevant to the vacancy.
 
 6. software_tools:
-List software such as HEC-HMS, HEC-RAS, SWMM,
-ArcGIS, QGIS, AutoCAD, Excel, Python or other relevant tools.
+List relevant software and technical tools.
 
 7. certifications:
-List relevant professional certifications.
+List relevant certifications.
 
 8. relevant_experience_evidence:
-Provide short evidence from the CV showing relevant experience.
+Provide short evidence from the CV demonstrating relevant experience.
 
 9. strengths:
-List important strengths for the Hydrologist position.
+List strengths relevant to the vacancy.
 
 10. potential_gaps:
-List missing or weaker areas relevant to the job.
+List missing or weaker areas relevant to the vacancy.
 
 Do not invent information that is not supported by the CV.
 """
@@ -761,8 +715,8 @@ Do not invent information that is not supported by the CV.
             {
                 "role": "system",
                 "content":
-                    "You are a professional HR recruitment and "
-                    "Hydrology CV analysis assistant."
+                    "You are a professional HR recruitment "
+                    "and CV analysis assistant."
             },
             {
                 "role": "user",
@@ -775,7 +729,6 @@ Do not invent information that is not supported by the CV.
         max_tokens=4000
     )
 
-
     response_text = (
         response
         .choices[0]
@@ -783,46 +736,34 @@ Do not invent information that is not supported by the CV.
         .content
     )
 
-
     data = clean_json_response(
         response_text
     )
-
 
     if data is None:
 
         raise ValueError(
             "The AI returned an invalid JSON response. "
-            "Please try analyzing the CV again."
+            "Please try again."
         )
-
 
     return data
 
 
 # ============================================================
-# SCORING FUNCTIONS
+# SCORING
 # ============================================================
 
-def experience_score(
-    years,
-    minimum_required
-):
+def experience_score(years, minimum_required):
 
     try:
 
-        years = float(
-            years
-        )
-
-        minimum_required = float(
-            minimum_required
-        )
+        years = float(years)
+        minimum_required = float(minimum_required)
 
     except Exception:
 
         return 0
-
 
     if minimum_required <= 0:
 
@@ -834,95 +775,63 @@ def experience_score(
             years * 20
         )
 
-
     score = (
-        years /
-        minimum_required
+        years / minimum_required
     ) * 100
 
-
     return round(
-        min(
-            100,
-            score
-        ),
+        min(100, score),
         2
     )
 
 
-def education_score(
-    education
-):
+def education_score(education):
 
     education_text = normalize_text(
-        safe_join(
-            education
-        )
+        safe_join(education)
     )
 
     if not education_text:
         return 0
 
-
-    # Directly relevant fields
+    # Hydrology / Water Resources
     if (
-        "hydrology"
-        in education_text
+        "hydrology" in education_text
         or
-        "water resources"
-        in education_text
+        "water resources" in education_text
     ):
-
         return 100
 
-
+    # Related engineering
     if (
-        "civil engineering"
-        in education_text
+        "civil engineering" in education_text
         or
-        "environmental engineering"
-        in education_text
+        "environmental engineering" in education_text
     ):
-
         return 90
 
-
     if "engineering" in education_text:
-
         return 80
 
-
     if (
-        "geology"
-        in education_text
+        "geology" in education_text
         or
-        "geography"
-        in education_text
+        "geography" in education_text
     ):
-
         return 70
-
 
     return 40
 
 
-def certification_score(
-    certifications
-):
+def certification_score(certifications):
 
-    certifications = safe_list(
-        certifications
-    )
+    certifications = safe_list(certifications)
 
     if not certifications:
         return 0
 
     return 100
 
-
-# ============================================================
-# CALCULATE FINAL SCORE
-# ============================================================
 
 def calculate_scores(
     candidate,
@@ -951,8 +860,6 @@ def calculate_scores(
         []
     )
 
-
-    # Individual scores
     requirement_score = keyword_score(
         matched,
         required_keywords
@@ -973,103 +880,72 @@ def calculate_scores(
         certifications
     )
 
-
     total_weight = sum(
         weights.values()
     )
 
-
     if total_weight <= 0:
         total_weight = 100
 
-
     final_score = (
 
-        (
-            exp_score *
-            weights["experience"]
-        )
+        exp_score *
+        weights["experience"]
 
         +
 
-        (
-            technical_score *
-            weights["technical"]
-        )
+        technical_score *
+        weights["technical"]
 
         +
 
-        (
-            edu_score *
-            weights["education"]
-        )
+        edu_score *
+        weights["education"]
 
         +
 
-        (
-            requirement_score *
-            weights["requirements"]
-        )
+        requirement_score *
+        weights["requirements"]
 
         +
 
-        (
-            cert_score *
-            weights["certification"]
-        )
+        cert_score *
+        weights["certification"]
 
     ) / total_weight
 
-
-    candidate[
-        "experience_score"
-    ] = round(
+    candidate["experience_score"] = round(
         exp_score,
         2
     )
 
-    candidate[
-        "technical_score"
-    ] = round(
+    candidate["technical_score"] = round(
         technical_score,
         2
     )
 
-    candidate[
-        "education_score"
-    ] = round(
+    candidate["education_score"] = round(
         edu_score,
         2
     )
 
-    candidate[
-        "requirements_score"
-    ] = round(
+    candidate["requirements_score"] = round(
         requirement_score,
         2
     )
 
-    candidate[
-        "certification_score"
-    ] = round(
+    candidate["certification_score"] = round(
         cert_score,
         2
     )
 
-    candidate[
-        "final_score"
-    ] = round(
+    candidate["final_score"] = round(
         final_score,
         2
     )
 
-
     return candidate
 
-
-# ============================================================
-# RECALCULATE ALL RESULTS
-# ============================================================
 
 def recalculate_results():
 
@@ -1078,61 +954,43 @@ def recalculate_results():
         normalize_keyword(x)
 
         for x in
-        st.session_state
-        .required_keywords
-        .split(",")
+        st.session_state.required_keywords.split(",")
 
         if normalize_keyword(x)
     ]
 
-
     weights = {
 
         "experience":
-            st.session_state
-            .weight_experience,
+            st.session_state.weight_experience,
 
         "technical":
-            st.session_state
-            .weight_technical,
+            st.session_state.weight_technical,
 
         "education":
-            st.session_state
-            .weight_education,
+            st.session_state.weight_education,
 
         "requirements":
-            st.session_state
-            .weight_requirements,
+            st.session_state.weight_requirements,
 
         "certification":
-            st.session_state
-            .weight_certification
+            st.session_state.weight_certification
     }
 
+    for candidate in st.session_state.candidates:
 
-    for candidate in (
-        st.session_state.candidates
-    ):
+        matched, missing = find_keywords_in_cv(
 
-        matched, missing = (
-            find_keywords_in_cv(
-                candidate.get(
-                    "cv_text",
-                    ""
-                ),
-                required_keywords
-            )
+            candidate.get(
+                "cv_text",
+                ""
+            ),
+
+            required_keywords
         )
 
-
-        candidate[
-            "matched_keywords"
-        ] = matched
-
-        candidate[
-            "missing_keywords"
-        ] = missing
-
+        candidate["matched_keywords"] = matched
+        candidate["missing_keywords"] = missing
 
         calculate_scores(
 
@@ -1140,14 +998,11 @@ def recalculate_results():
 
             required_keywords,
 
-            st.session_state
-            .min_experience,
+            st.session_state.min_experience,
 
             weights
         )
 
-
-    # Highest score first
     st.session_state.candidates.sort(
 
         key=lambda x:
@@ -1164,11 +1019,9 @@ def recalculate_results():
 # JOB REQUIREMENTS
 # ============================================================
 
-st.header("📋 Hydrologist Job Requirements")
-
+st.header("📋 Job Requirements")
 
 col1, col2 = st.columns(2)
-
 
 with col1:
 
@@ -1176,7 +1029,6 @@ with col1:
         "Job Title",
         key="job_title"
     )
-
 
     st.number_input(
         "Minimum Relevant Experience (Years)",
@@ -1195,15 +1047,13 @@ with col2:
         height=180,
 
         help=(
-            "Default Hydrologist keywords are provided. "
-            "You can add, remove or change them."
+            "Default keywords are provided based on the sample vacancy. "
+            "You can add, remove, or change them."
         )
     )
 
-
     st.caption(
-        "💡 Default Hydrologist keywords are already provided. "
-        "Modify them if the vacancy has different requirements."
+        "💡 The default keywords can be changed for any job role."
     )
 
 
@@ -1213,7 +1063,6 @@ with col2:
 
 st.subheader("📝 Job Description")
 
-
 st.text_area(
     "Job Description",
 
@@ -1222,125 +1071,14 @@ st.text_area(
     height=320,
 
     help=(
-        "A Hydrologist job description is provided by default. "
-        "You can edit it for a specific vacancy."
+        "A sample job description is provided by default. "
+        "Edit it according to the vacancy."
     )
 )
-
 
 st.caption(
-    "💡 The job description is pre-filled for a Hydrologist position. "
-    "You can change it whenever required."
+    "💡 The default description can be customized for any position."
 )
-
-
-# ============================================================
-# SCORING WEIGHTS
-# ============================================================
-
-st.subheader("⚖️ Candidate Scoring Weights")
-
-
-st.caption(
-    "Adjust the importance of each factor. "
-    "The final score is automatically recalculated."
-)
-
-
-weight_col1, weight_col2, weight_col3, weight_col4, weight_col5 = (
-    st.columns(5)
-)
-
-
-with weight_col1:
-
-    st.slider(
-        "Experience",
-        min_value=0,
-        max_value=100,
-        value=30,
-        key="weight_experience"
-    )
-
-
-with weight_col2:
-
-    st.slider(
-        "Technical Skills",
-        min_value=0,
-        max_value=100,
-        value=25,
-        key="weight_technical"
-    )
-
-
-with weight_col3:
-
-    st.slider(
-        "Education",
-        min_value=0,
-        max_value=100,
-        value=15,
-        key="weight_education"
-    )
-
-
-with weight_col4:
-
-    st.slider(
-        "Job Requirements",
-        min_value=0,
-        max_value=100,
-        value=20,
-        key="weight_requirements"
-    )
-
-
-with weight_col5:
-
-    st.slider(
-        "Certifications",
-        min_value=0,
-        max_value=100,
-        value=10,
-        key="weight_certification"
-    )
-
-
-total_weight = (
-
-    st.session_state.weight_experience
-
-    +
-
-    st.session_state.weight_technical
-
-    +
-
-    st.session_state.weight_education
-
-    +
-
-    st.session_state.weight_requirements
-
-    +
-
-    st.session_state.weight_certification
-)
-
-
-if total_weight == 100:
-
-    st.success(
-        "✅ Total scoring weight = 100%"
-    )
-
-else:
-
-    st.warning(
-        f"Total scoring weight = {total_weight}%. "
-        "The application will normalize the score automatically."
-    )
 
 
 # ============================================================
@@ -1348,7 +1086,6 @@ else:
 # ============================================================
 
 st.header("📄 Upload Candidate CVs")
-
 
 uploaded_files = st.file_uploader(
 
@@ -1361,7 +1098,6 @@ uploaded_files = st.file_uploader(
 
     accept_multiple_files=True
 )
-
 
 if uploaded_files:
 
@@ -1383,18 +1119,14 @@ if st.button(
     use_container_width=True
 ):
 
-    # Clear previous results
     st.session_state.candidates = []
-
     st.session_state.analysis_errors = []
 
-
-    # Check API key
     if not api_key:
 
         st.error(
             "GROQ_API_KEY is missing. "
-            "Please add GROQ_API_KEY to Streamlit Secrets."
+            "Please add it to Streamlit Secrets."
         )
 
     elif not uploaded_files:
@@ -1411,15 +1143,11 @@ if st.button(
 
     else:
 
-        progress = st.progress(
-            0
-        )
-
+        progress = st.progress(0)
 
         total_files = len(
             uploaded_files
         )
-
 
         for index, uploaded_file in enumerate(
             uploaded_files
@@ -1427,11 +1155,9 @@ if st.button(
 
             try:
 
-                # Extract CV text
                 cv_text = extract_text(
                     uploaded_file
                 )
-
 
                 if not cv_text.strip():
 
@@ -1439,19 +1165,14 @@ if st.button(
                         "Could not extract readable text from this CV."
                     )
 
-
                 with st.spinner(
                     f"Analyzing {uploaded_file.name}..."
                 ):
 
                     analysis = analyze_cv(
-
                         cv_text,
-
-                        st.session_state
-                        .job_description
+                        st.session_state.job_description
                     )
-
 
                 candidate = {
 
@@ -1540,42 +1261,29 @@ if st.button(
                         )
                 }
 
+                if not candidate["candidate_name"]:
 
-                # Fallback candidate name
-                if not candidate[
-                    "candidate_name"
-                ]:
-
-                    candidate[
-                        "candidate_name"
-                    ] = uploaded_file.name
-
+                    candidate["candidate_name"] = (
+                        uploaded_file.name
+                    )
 
                 st.session_state.candidates.append(
                     candidate
                 )
 
-
             except Exception as e:
 
                 st.session_state.analysis_errors.append(
-
                     f"{uploaded_file.name}: {str(e)}"
-
                 )
 
-
             progress.progress(
-                (index + 1) /
-                total_files
+                (index + 1) / total_files
             )
 
-
-        # Calculate scores
         if st.session_state.candidates:
 
             recalculate_results()
-
 
             st.success(
                 f"✅ Successfully analyzed "
@@ -1584,23 +1292,16 @@ if st.button(
 
 
 # ============================================================
-# ANALYSIS ERRORS
+# ERRORS
 # ============================================================
 
 if st.session_state.analysis_errors:
 
-    st.subheader(
-        "⚠️ Analysis Errors"
-    )
+    st.subheader("⚠️ Analysis Errors")
 
+    for error in st.session_state.analysis_errors:
 
-    for error in (
-        st.session_state.analysis_errors
-    ):
-
-        st.error(
-            error
-        )
+        st.error(error)
 
 
 # ============================================================
@@ -1609,18 +1310,12 @@ if st.session_state.analysis_errors:
 
 if st.session_state.candidates:
 
-    st.header(
-        "🏆 Candidate Ranking"
-    )
-
+    st.header("🏆 Candidate Ranking")
 
     ranking_data = []
 
-
     for index, candidate in enumerate(
-
         st.session_state.candidates,
-
         start=1
     ):
 
@@ -1672,18 +1367,13 @@ if st.session_state.candidates:
                 )
         })
 
-
     ranking_df = pd.DataFrame(
         ranking_data
     )
 
-
     st.dataframe(
-
         ranking_df,
-
         use_container_width=True,
-
         hide_index=True
     )
 
@@ -1692,32 +1382,23 @@ if st.session_state.candidates:
     # KEYWORD MATCHING
     # ========================================================
 
-    st.header(
-        "🔎 Keyword Matching"
-    )
-
+    st.header("🔎 Keyword Matching")
 
     required_keywords = [
 
         normalize_keyword(x)
 
         for x in
-        st.session_state
-        .required_keywords
-        .split(",")
+        st.session_state.required_keywords.split(",")
 
         if normalize_keyword(x)
     ]
-
 
     if required_keywords:
 
         keyword_rows = []
 
-
-        for candidate in (
-            st.session_state.candidates
-        ):
+        for candidate in st.session_state.candidates:
 
             matched = candidate.get(
                 "matched_keywords",
@@ -1729,7 +1410,6 @@ if st.session_state.candidates:
                 []
             )
 
-
             keyword_rows.append({
 
                 "Candidate":
@@ -1739,14 +1419,10 @@ if st.session_state.candidates:
                     ),
 
                 "Matched Keywords":
-                    ", ".join(
-                        matched
-                    ),
+                    ", ".join(matched),
 
                 "Missing Keywords":
-                    ", ".join(
-                        missing
-                    ),
+                    ", ".join(missing),
 
                 "Keyword Match %":
                     keyword_score(
@@ -1755,26 +1431,20 @@ if st.session_state.candidates:
                     )
             })
 
-
         keyword_df = pd.DataFrame(
             keyword_rows
         )
 
-
         st.dataframe(
-
             keyword_df,
-
             use_container_width=True,
-
             hide_index=True
         )
-
 
     else:
 
         st.info(
-            "Enter required keywords to see keyword matching."
+            "Enter keywords to see keyword matching."
         )
 
 
@@ -1782,25 +1452,17 @@ if st.session_state.candidates:
     # SCORE CHART
     # ========================================================
 
-    st.header(
-        "📊 Candidate Scores"
-    )
-
+    st.header("📊 Candidate Scores")
 
     chart_df = (
-
         ranking_df[
             [
                 "Candidate",
                 "Final Score"
             ]
         ]
-
-        .set_index(
-            "Candidate"
-        )
+        .set_index("Candidate")
     )
-
 
     st.bar_chart(
         chart_df
@@ -1812,14 +1474,14 @@ if st.session_state.candidates:
     # ========================================================
 
     if st.button(
-        "🔄 Recalculate Ranking Using Current Weights",
+        "🔄 Recalculate Ranking Using Current Weightage",
         use_container_width=True
     ):
 
         recalculate_results()
 
         st.success(
-            "Ranking recalculated using the current scoring weights."
+            "Ranking recalculated using the current weightage."
         )
 
         st.rerun()
@@ -1829,10 +1491,7 @@ if st.session_state.candidates:
     # CANDIDATE DETAILS
     # ========================================================
 
-    st.header(
-        "👤 Candidate Details"
-    )
-
+    st.header("👤 Candidate Details")
 
     candidate_options = [
 
@@ -1845,7 +1504,6 @@ if st.session_state.candidates:
         st.session_state.candidates
     ]
 
-
     selected_detail_name = st.selectbox(
 
         "Select Candidate",
@@ -1855,11 +1513,9 @@ if st.session_state.candidates:
         key="candidate_detail_selector"
     )
 
-
     detail_candidate = next(
 
         (
-
             candidate
 
             for candidate in
@@ -1875,7 +1531,6 @@ if st.session_state.candidates:
         None
     )
 
-
     if detail_candidate:
 
         st.subheader(
@@ -1885,13 +1540,7 @@ if st.session_state.candidates:
             )
         )
 
-
-        # ====================================================
-        # SUMMARY METRICS
-        # ====================================================
-
         col1, col2, col3, col4 = st.columns(4)
-
 
         with col1:
 
@@ -1900,14 +1549,12 @@ if st.session_state.candidates:
                 f"{detail_candidate.get('final_score', 0):.2f}%"
             )
 
-
         with col2:
 
             st.metric(
                 "Experience",
                 f"{detail_candidate.get('years_relevant_experience', 0)} years"
             )
-
 
         with col3:
 
@@ -1922,7 +1569,6 @@ if st.session_state.candidates:
                 ):.2f}%"
             )
 
-
         with col4:
 
             st.metric(
@@ -1932,43 +1578,31 @@ if st.session_state.candidates:
 
 
         # ====================================================
-        # MATCHED / MISSING KEYWORDS
+        # MATCHED / MISSING
         # ====================================================
 
-        st.subheader(
-            "🔎 Keyword Analysis"
-        )
-
+        st.subheader("🔎 Keyword Analysis")
 
         matched_keywords = detail_candidate.get(
             "matched_keywords",
             []
         )
 
-
         missing_keywords = detail_candidate.get(
             "missing_keywords",
             []
         )
 
-
         col1, col2 = st.columns(2)
-
 
         with col1:
 
-            st.markdown(
-                "### ✅ Matched Keywords"
-            )
-
+            st.markdown("### ✅ Matched Keywords")
 
             if matched_keywords:
 
                 for keyword in matched_keywords:
-
-                    st.success(
-                        keyword
-                    )
+                    st.success(keyword)
 
             else:
 
@@ -1976,21 +1610,14 @@ if st.session_state.candidates:
                     "No required keywords matched."
                 )
 
-
         with col2:
 
-            st.markdown(
-                "### ❌ Missing Keywords"
-            )
-
+            st.markdown("### ❌ Missing Keywords")
 
             if missing_keywords:
 
                 for keyword in missing_keywords:
-
-                    st.error(
-                        keyword
-                    )
+                    st.error(keyword)
 
             else:
 
@@ -2003,16 +1630,12 @@ if st.session_state.candidates:
         # EDUCATION
         # ====================================================
 
-        st.subheader(
-            "🎓 Education"
-        )
-
+        st.subheader("🎓 Education")
 
         education = detail_candidate.get(
             "education",
             []
         )
-
 
         if education:
 
@@ -2033,16 +1656,12 @@ if st.session_state.candidates:
         # PREVIOUS ROLES
         # ====================================================
 
-        st.subheader(
-            "💼 Previous Roles"
-        )
-
+        st.subheader("💼 Previous Roles")
 
         roles = detail_candidate.get(
             "previous_roles",
             []
         )
-
 
         if roles:
 
@@ -2063,16 +1682,12 @@ if st.session_state.candidates:
         # TECHNICAL SKILLS
         # ====================================================
 
-        st.subheader(
-            "🛠️ Technical Skills"
-        )
-
+        st.subheader("🛠️ Technical Skills")
 
         skills = detail_candidate.get(
             "technical_skills",
             []
         )
-
 
         if skills:
 
@@ -2090,19 +1705,15 @@ if st.session_state.candidates:
 
 
         # ====================================================
-        # SOFTWARE TOOLS
+        # SOFTWARE
         # ====================================================
 
-        st.subheader(
-            "💻 Software & Tools"
-        )
-
+        st.subheader("💻 Software & Tools")
 
         software = detail_candidate.get(
             "software_tools",
             []
         )
-
 
         if software:
 
@@ -2123,16 +1734,12 @@ if st.session_state.candidates:
         # CERTIFICATIONS
         # ====================================================
 
-        st.subheader(
-            "📜 Certifications"
-        )
-
+        st.subheader("📜 Certifications")
 
         certifications = detail_candidate.get(
             "certifications",
             []
         )
-
 
         if certifications:
 
@@ -2153,16 +1760,12 @@ if st.session_state.candidates:
         # EXPERIENCE EVIDENCE
         # ====================================================
 
-        st.subheader(
-            "📌 Relevant Experience Evidence"
-        )
-
+        st.subheader("📌 Relevant Experience Evidence")
 
         evidence = detail_candidate.get(
             "relevant_experience_evidence",
             []
         )
-
 
         if evidence:
 
@@ -2183,16 +1786,12 @@ if st.session_state.candidates:
         # STRENGTHS
         # ====================================================
 
-        st.subheader(
-            "💪 Strengths"
-        )
-
+        st.subheader("💪 Strengths")
 
         strengths = detail_candidate.get(
             "strengths",
             []
         )
-
 
         if strengths:
 
@@ -2210,19 +1809,15 @@ if st.session_state.candidates:
 
 
         # ====================================================
-        # POTENTIAL GAPS
+        # GAPS
         # ====================================================
 
-        st.subheader(
-            "⚠️ Potential Gaps"
-        )
-
+        st.subheader("⚠️ Potential Gaps")
 
         gaps = detail_candidate.get(
             "potential_gaps",
             []
         )
-
 
         if gaps:
 
@@ -2243,10 +1838,7 @@ if st.session_state.candidates:
         # SCORE BREAKDOWN
         # ====================================================
 
-        st.subheader(
-            "⚖️ Score Breakdown"
-        )
-
+        st.subheader("⚖️ Score Breakdown")
 
         score_breakdown = pd.DataFrame({
 
@@ -2288,30 +1880,21 @@ if st.session_state.candidates:
 
             "Weight": [
 
-                st.session_state
-                .weight_experience,
+                st.session_state.weight_experience,
 
-                st.session_state
-                .weight_technical,
+                st.session_state.weight_technical,
 
-                st.session_state
-                .weight_education,
+                st.session_state.weight_education,
 
-                st.session_state
-                .weight_requirements,
+                st.session_state.weight_requirements,
 
-                st.session_state
-                .weight_certification
+                st.session_state.weight_certification
             ]
         })
 
-
         st.dataframe(
-
             score_breakdown,
-
             use_container_width=True,
-
             hide_index=True
         )
 
@@ -2322,35 +1905,24 @@ if st.session_state.candidates:
 
 if st.session_state.candidates:
 
-    st.header(
-        "📥 Export Results"
-    )
-
+    st.header("📥 Export Results")
 
     ranking_export = []
-
     details_export = []
-
     keyword_export = []
-
 
     required_keywords = [
 
         normalize_keyword(x)
 
         for x in
-        st.session_state
-        .required_keywords
-        .split(",")
+        st.session_state.required_keywords.split(",")
 
         if normalize_keyword(x)
     ]
 
-
     for index, candidate in enumerate(
-
         st.session_state.candidates,
-
         start=1
     ):
 
@@ -2413,7 +1985,6 @@ if st.session_state.candidates:
                     0
                 )
         })
-
 
         details_export.append({
 
@@ -2488,7 +2059,6 @@ if st.session_state.candidates:
                 )
         })
 
-
         keyword_export.append({
 
             "Candidate Name":
@@ -2515,12 +2085,10 @@ if st.session_state.candidates:
 
             "Keyword Match %":
                 keyword_score(
-
                     candidate.get(
                         "matched_keywords",
                         []
                     ),
-
                     required_keywords
                 )
         })
@@ -2530,123 +2098,80 @@ if st.session_state.candidates:
         ranking_export
     )
 
-
     details_export_df = pd.DataFrame(
         details_export
     )
-
 
     keyword_export_df = pd.DataFrame(
         keyword_export
     )
 
-
     weights_export_df = pd.DataFrame([
 
         {
-            "Scoring Category":
-                "Experience",
-
+            "Scoring Category": "Experience",
             "Weight":
-                st.session_state
-                .weight_experience
+                st.session_state.weight_experience
         },
 
         {
-            "Scoring Category":
-                "Technical Skills",
-
+            "Scoring Category": "Technical Skills",
             "Weight":
-                st.session_state
-                .weight_technical
+                st.session_state.weight_technical
         },
 
         {
-            "Scoring Category":
-                "Education",
-
+            "Scoring Category": "Education",
             "Weight":
-                st.session_state
-                .weight_education
+                st.session_state.weight_education
         },
 
         {
-            "Scoring Category":
-                "Job Requirements",
-
+            "Scoring Category": "Job Requirements",
             "Weight":
-                st.session_state
-                .weight_requirements
+                st.session_state.weight_requirements
         },
 
         {
-            "Scoring Category":
-                "Certifications",
-
+            "Scoring Category": "Certifications",
             "Weight":
-                st.session_state
-                .weight_certification
+                st.session_state.weight_certification
         }
     ])
 
 
-    # ========================================================
-    # CREATE EXCEL FILE
-    # ========================================================
-
     output = BytesIO()
 
-
     with pd.ExcelWriter(
-
         output,
-
         engine="openpyxl"
-
     ) as writer:
 
         ranking_export_df.to_excel(
-
             writer,
-
             sheet_name="Candidate Ranking",
-
             index=False
         )
-
 
         details_export_df.to_excel(
-
             writer,
-
             sheet_name="Candidate Details",
-
             index=False
         )
-
 
         weights_export_df.to_excel(
-
             writer,
-
             sheet_name="Scoring Weights",
-
             index=False
         )
-
 
         keyword_export_df.to_excel(
-
             writer,
-
             sheet_name="Keyword Matching",
-
             index=False
         )
 
-
     output.seek(0)
-
 
     st.download_button(
 
@@ -2654,7 +2179,7 @@ if st.session_state.candidates:
 
         data=output,
 
-        file_name="HireTech_AI_Hydrologist_Ranking.xlsx",
+        file_name="HireTech_AI_Candidate_Ranking.xlsx",
 
         mime=(
             "application/vnd.openxmlformats-officedocument."
@@ -2672,5 +2197,5 @@ if st.session_state.candidates:
 st.divider()
 
 st.caption(
-    "HireTech AI • AI-assisted Hydrologist recruitment and candidate analysis"
+    "HireTech AI • AI-assisted recruitment and candidate analysis"
 )
