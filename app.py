@@ -3,13 +3,14 @@ import pandas as pd
 import json
 import re
 from io import BytesIO
+
 from groq import Groq
 from pypdf import PdfReader
 from docx import Document
 
 
 # ============================================================
-# PAGE CONFIGURATION
+# PAGE CONFIG
 # ============================================================
 
 st.set_page_config(
@@ -21,12 +22,9 @@ st.set_page_config(
 st.title("👔 HireTech AI")
 st.subheader("AI-Powered CV Screening & Candidate Ranking")
 
-st.markdown(
-    """
-    **HireTech AI** analyzes multiple CVs against job-specific requirements,
-    extracts relevant candidate information, calculates transparent scores,
-    and ranks candidates based on recruiter-defined weightages.
-    """
+st.write(
+    "Upload multiple CVs, define the job requirements, and HireTech AI "
+    "will analyze, score, and rank candidates."
 )
 
 
@@ -34,50 +32,86 @@ st.markdown(
 # SESSION STATE
 # ============================================================
 
-if "candidate_data" not in st.session_state:
-    st.session_state.candidate_data = []
+defaults = {
+    "candidate_data": [],
+    "processed": False,
+    "analysis_errors": [],
+    "job_info": {},
+    "weight_experience": 30,
+    "weight_technical": 30,
+    "weight_education": 15,
+    "weight_requirements": 15,
+    "weight_certification": 10,
+}
 
-if "processed" not in st.session_state:
-    st.session_state.processed = False
-
-if "analysis_errors" not in st.session_state:
-    st.session_state.analysis_errors = []
-
-if "job_info" not in st.session_state:
-    st.session_state.job_info = {}
-
-if "weight_experience" not in st.session_state:
-    st.session_state.weight_experience = 30
-
-if "weight_technical" not in st.session_state:
-    st.session_state.weight_technical = 30
-
-if "weight_education" not in st.session_state:
-    st.session_state.weight_education = 15
-
-if "weight_requirements" not in st.session_state:
-    st.session_state.weight_requirements = 15
-
-if "weight_certification" not in st.session_state:
-    st.session_state.weight_certification = 10
+for key, value in defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
 
 
 # ============================================================
-# GENERAL DATA-SAFETY HELPERS
+# SAFE DATA FUNCTIONS
 # ============================================================
+
+def safe_string(value):
+    """Convert any value into safe display text."""
+
+    if value is None:
+        return ""
+
+    if isinstance(value, str):
+        return value.strip()
+
+    if isinstance(value, dict):
+
+        # Education dictionary
+        if "degree" in value:
+
+            parts = []
+
+            if value.get("degree"):
+                parts.append(
+                    str(value["degree"])
+                )
+
+            if value.get("institution"):
+                parts.append(
+                    str(value["institution"])
+                )
+
+            if value.get("year"):
+                parts.append(
+                    str(value["year"])
+                )
+
+            return " | ".join(parts)
+
+        # Generic dictionary
+        parts = []
+
+        for key, val in value.items():
+
+            if val is not None and str(val).strip():
+
+                parts.append(
+                    f"{key}: {val}"
+                )
+
+        return " | ".join(parts)
+
+    if isinstance(value, (list, tuple)):
+
+        return "; ".join(
+            safe_string(x)
+            for x in value
+            if safe_string(x)
+        )
+
+    return str(value).strip()
+
 
 def safe_list(value):
-    """
-    Convert AI output into a safe Python list.
-
-    Handles:
-    - list
-    - tuple
-    - string
-    - None
-    - numbers
-    - unexpected values
-    """
+    """Always return a list."""
 
     if value is None:
         return []
@@ -100,57 +134,24 @@ def safe_list(value):
     return [value]
 
 
-def safe_string(value):
-    """
-    Convert any value safely into a string.
-    """
-
-    if value is None:
-        return ""
-
-    return str(value).strip()
-
-
-def safe_join(value, separator="; "):
-    """
-    Safely convert a list/string/None into text.
-
-    This prevents Excel export errors caused by:
-    '; '.join(None)
-    or
-    '; '.join([1, 2, 3])
-    """
+def safe_join(value):
+    """Safely convert any value to Excel/display text."""
 
     items = safe_list(value)
 
-    cleaned = []
+    output = []
 
     for item in items:
 
-        if item is None:
-            continue
+        text = safe_string(item)
 
-        if isinstance(item, dict):
-            cleaned.append(
-                json.dumps(
-                    item,
-                    ensure_ascii=False
-                )
-            )
+        if text:
+            output.append(text)
 
-        else:
-            text = str(item).strip()
-
-            if text:
-                cleaned.append(text)
-
-    return separator.join(cleaned)
+    return "; ".join(output)
 
 
 def safe_number(value, default=0):
-    """
-    Safely convert a value to float.
-    """
 
     if value is None:
         return default
@@ -158,7 +159,7 @@ def safe_number(value, default=0):
     try:
         return float(value)
 
-    except (ValueError, TypeError):
+    except Exception:
         return default
 
 
@@ -168,73 +169,59 @@ def safe_number(value, default=0):
 
 def extract_pdf_text(uploaded_file):
 
-    try:
+    reader = PdfReader(uploaded_file)
 
-        reader = PdfReader(uploaded_file)
+    pages = []
 
-        text = []
+    for page in reader.pages:
 
-        for page in reader.pages:
+        text = page.extract_text()
 
-            page_text = page.extract_text()
+        if text:
+            pages.append(text)
 
-            if page_text:
-                text.append(page_text)
-
-        return "\n".join(text)
-
-    except Exception as e:
-
-        raise Exception(
-            f"PDF extraction failed: {str(e)}"
-        )
+    return "\n".join(pages)
 
 
 def extract_docx_text(uploaded_file):
 
-    try:
+    doc = Document(uploaded_file)
 
-        doc = Document(uploaded_file)
+    text = []
 
-        text = []
+    # Paragraphs
+    for paragraph in doc.paragraphs:
 
-        # Paragraphs
-        for paragraph in doc.paragraphs:
+        if paragraph.text.strip():
 
-            if paragraph.text.strip():
-                text.append(
-                    paragraph.text.strip()
-                )
+            text.append(
+                paragraph.text.strip()
+            )
 
-        # Tables
-        for table in doc.tables:
+    # Tables
+    for table in doc.tables:
 
-            for row in table.rows:
+        for row in table.rows:
 
-                row_text = []
+            row_text = []
 
-                for cell in row.cells:
+            for cell in row.cells:
 
-                    cell_text = cell.text.strip()
+                cell_text = cell.text.strip()
 
-                    if cell_text:
-                        row_text.append(
-                            cell_text
-                        )
+                if cell_text:
 
-                if row_text:
-
-                    text.append(
-                        " | ".join(row_text)
+                    row_text.append(
+                        cell_text
                     )
 
-        return "\n".join(text)
+            if row_text:
 
-    except Exception as e:
+                text.append(
+                    " | ".join(row_text)
+                )
 
-        raise Exception(
-            f"DOCX extraction failed: {str(e)}"
-        )
+    return "\n".join(text)
 
 
 def extract_text(uploaded_file):
@@ -247,247 +234,26 @@ def extract_text(uploaded_file):
             uploaded_file
         )
 
-    elif filename.endswith(".docx"):
+    if filename.endswith(".docx"):
 
         return extract_docx_text(
             uploaded_file
         )
 
-    else:
-
-        raise Exception(
-            "Unsupported file format."
-        )
-
-
-# ============================================================
-# JSON HANDLING
-# ============================================================
-
-def clean_json_response(response_text):
-
-    if not response_text:
-
-        raise ValueError(
-            "AI returned an empty response."
-        )
-
-    response_text = response_text.strip()
-
-    # Remove Markdown code fences
-    response_text = re.sub(
-        r"^```(?:json)?\s*",
-        "",
-        response_text,
-        flags=re.IGNORECASE
-    )
-
-    response_text = re.sub(
-        r"\s*```$",
-        "",
-        response_text
-    )
-
-    response_text = response_text.strip()
-
-    # Extract JSON object
-    start = response_text.find("{")
-    end = response_text.rfind("}")
-
-    if start == -1 or end == -1:
-
-        raise ValueError(
-            "No JSON object found in AI response."
-        )
-
-    return response_text[
-        start:end + 1
-    ]
-
-
-def repair_json_with_ai(
-    client,
-    model_name,
-    broken_response
-):
-
-    repair_prompt = f"""
-You are a JSON repair assistant.
-
-The following response should be a JSON object,
-but it contains JSON syntax errors.
-
-Repair the JSON.
-
-IMPORTANT:
-- Return ONLY valid JSON.
-- Do not use Markdown.
-- Do not use code fences.
-- Do not add explanations.
-- Do not change the meaning of the information.
-- Make sure all commas, brackets and quotation marks are correct.
-
-BROKEN RESPONSE:
-
-{broken_response}
-"""
-
-    response = client.chat.completions.create(
-        model=model_name,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You repair malformed JSON. "
-                    "Return only valid JSON."
-                )
-            },
-            {
-                "role": "user",
-                "content": repair_prompt
-            }
-        ],
-        temperature=0
-    )
-
-    repaired = response.choices[0].message.content
-
-    cleaned = clean_json_response(
-        repaired
-    )
-
-    return json.loads(cleaned)
-
-
-def parse_ai_json(
-    client,
-    model_name,
-    response_text
-):
-
-    cleaned = clean_json_response(
-        response_text
-    )
-
-    try:
-
-        return json.loads(cleaned)
-
-    except json.JSONDecodeError:
-
-        return repair_json_with_ai(
-            client,
-            model_name,
-            cleaned
-        )
-
-
-# ============================================================
-# AI CV ANALYSIS
-# ============================================================
-
-def analyze_cv(
-    client,
-    model_name,
-    cv_text,
-    job_info
-):
-
-    keywords = job_info["keywords"]
-
-    prompt = f"""
-You are an AI recruitment screening assistant.
-
-Analyze the candidate CV against the job requirements.
-
-IMPORTANT RULES:
-
-1. Use ONLY information contained in the CV.
-2. Do NOT invent qualifications or experience.
-3. years_relevant_experience must be a number.
-4. Identify experience relevant to the specified job.
-5. Identify technical skills and software tools.
-6. Identify certifications.
-7. Return ONLY one valid JSON object.
-8. Do not use Markdown.
-9. Do not use code fences.
-10. Do not write explanations outside the JSON.
-11. Make sure the JSON is syntactically valid.
-
-JOB INFORMATION
-
-Job Title:
-{job_info["job_title"]}
-
-Minimum Relevant Experience:
-{job_info["min_experience"]} years
-
-Job Description:
-{job_info["job_description"]}
-
-Required Keywords:
-{", ".join(keywords)}
-
-RETURN EXACTLY THIS JSON STRUCTURE:
-
-{{
-    "candidate_name": "Full name or Not specified",
-    "education": [],
-    "years_relevant_experience": 0,
-    "previous_roles": [],
-    "technical_skills": [],
-    "software_tools": [],
-    "certifications": [],
-    "required_keywords_found": [],
-    "required_keywords_missing": [],
-    "relevant_experience_evidence": [],
-    "strengths": [],
-    "potential_gaps": []
-}}
-
-CANDIDATE CV:
-
-{cv_text}
-"""
-
-    response = client.chat.completions.create(
-        model=model_name,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a professional recruitment "
-                    "screening assistant. Return valid JSON only."
-                )
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        temperature=0
-    )
-
-    response_text = (
-        response.choices[0].message.content
-    )
-
-    return parse_ai_json(
-        client,
-        model_name,
-        response_text
+    raise ValueError(
+        "Only PDF and DOCX files are supported."
     )
 
 
 # ============================================================
-# KEYWORD MATCHING
+# TEXT NORMALIZATION
 # ============================================================
 
 def normalize_text(text):
 
     text = safe_string(text).lower()
 
-    # Normalize common variations
+    # Common spelling variations
     text = text.replace(
         "–",
         "-"
@@ -498,6 +264,13 @@ def normalize_text(text):
         "-"
     )
 
+    # Normalize ampersand
+    text = text.replace(
+        "&",
+        " and "
+    )
+
+    # Keep letters, numbers, #, +, dots and hyphens
     text = re.sub(
         r"[^a-z0-9+#.\- ]+",
         " ",
@@ -515,16 +288,12 @@ def normalize_text(text):
 
 def keyword_variants(keyword):
 
-    """
-    Generate simple variants for better matching.
-    """
-
-    original = safe_string(
+    keyword = safe_string(
         keyword
     )
 
     normalized = normalize_text(
-        original
+        keyword
     )
 
     variants = {
@@ -533,6 +302,7 @@ def keyword_variants(keyword):
 
     # Modeling / Modelling
     if "modeling" in normalized:
+
         variants.add(
             normalized.replace(
                 "modeling",
@@ -541,6 +311,7 @@ def keyword_variants(keyword):
         )
 
     if "modelling" in normalized:
+
         variants.add(
             normalized.replace(
                 "modelling",
@@ -550,6 +321,7 @@ def keyword_variants(keyword):
 
     # Organization / Organisation
     if "organization" in normalized:
+
         variants.add(
             normalized.replace(
                 "organization",
@@ -558,6 +330,7 @@ def keyword_variants(keyword):
         )
 
     if "organisation" in normalized:
+
         variants.add(
             normalized.replace(
                 "organisation",
@@ -568,84 +341,22 @@ def keyword_variants(keyword):
     return variants
 
 
-def find_matched_keywords(
-    candidate,
-    required_keywords
-):
+# ============================================================
+# KEYWORD MATCHING
+# ============================================================
+
+def find_keywords_in_cv(cv_text, required_keywords):
 
     """
-    Determine matched and missing job keywords.
+    IMPORTANT:
 
-    Matching is based on:
-    - Technical skills
-    - Software/tools
-    - Previous roles
-    - Education
-    - Relevant experience evidence
-    - Strengths
+    Keywords are matched directly against the COMPLETE CV text.
+
+    This does not depend on what the AI extracted as skills.
     """
 
-    searchable_items = []
-
-    searchable_items.extend(
-        safe_list(
-            candidate.get(
-                "technical_skills",
-                []
-            )
-        )
-    )
-
-    searchable_items.extend(
-        safe_list(
-            candidate.get(
-                "software_tools",
-                []
-            )
-        )
-    )
-
-    searchable_items.extend(
-        safe_list(
-            candidate.get(
-                "previous_roles",
-                []
-            )
-        )
-    )
-
-    searchable_items.extend(
-        safe_list(
-            candidate.get(
-                "education",
-                []
-            )
-        )
-    )
-
-    searchable_items.extend(
-        safe_list(
-            candidate.get(
-                "relevant_experience_evidence",
-                []
-            )
-        )
-    )
-
-    searchable_items.extend(
-        safe_list(
-            candidate.get(
-                "strengths",
-                []
-            )
-        )
-    )
-
-    searchable_text = normalize_text(
-        " ".join(
-            safe_string(x)
-            for x in searchable_items
-        )
+    cv_normalized = normalize_text(
+        cv_text
     )
 
     matched = []
@@ -668,7 +379,7 @@ def find_matched_keywords(
 
         for variant in variants:
 
-            if variant and variant in searchable_text:
+            if variant and variant in cv_normalized:
 
                 found = True
                 break
@@ -688,20 +399,20 @@ def find_matched_keywords(
     return matched, missing
 
 
-def calculate_keyword_score(
-    matched,
-    required
+def keyword_score(
+    matched_keywords,
+    required_keywords
 ):
 
     required = [
         safe_string(x).lower()
-        for x in safe_list(required)
+        for x in required_keywords
         if safe_string(x)
     ]
 
     matched = [
         safe_string(x).lower()
-        for x in safe_list(matched)
+        for x in matched_keywords
         if safe_string(x)
     ]
 
@@ -709,33 +420,250 @@ def calculate_keyword_score(
 
         return 100
 
-    unique_required = set(
+    required_set = set(
         required
     )
 
-    unique_matched = set(
+    matched_set = set(
         matched
     )
 
-    count = len(
-        unique_required.intersection(
-            unique_matched
+    percentage = (
+        len(
+            required_set.intersection(
+                matched_set
+            )
         )
+        /
+        len(required_set)
+        *
+        100
     )
 
     return round(
-        count /
-        len(unique_required)
-        * 100,
+        percentage,
         2
     )
 
 
 # ============================================================
-# EXPERIENCE SCORING
+# JSON FUNCTIONS
 # ============================================================
 
-def calculate_experience_score(
+def clean_json(response_text):
+
+    if not response_text:
+
+        raise ValueError(
+            "AI returned an empty response."
+        )
+
+    text = response_text.strip()
+
+    # Remove code fences
+    text = re.sub(
+        r"```json",
+        "",
+        text,
+        flags=re.IGNORECASE
+    )
+
+    text = re.sub(
+        r"```",
+        "",
+        text
+    )
+
+    text = text.strip()
+
+    start = text.find("{")
+    end = text.rfind("}")
+
+    if start == -1 or end == -1:
+
+        raise ValueError(
+            "AI response did not contain valid JSON."
+        )
+
+    return text[
+        start:end + 1
+    ]
+
+
+def repair_json(
+    client,
+    model_name,
+    broken_json
+):
+
+    prompt = f"""
+Repair the following malformed JSON.
+
+Return ONLY valid JSON.
+
+Do not explain anything.
+Do not use Markdown.
+Do not use code fences.
+Do not change the information.
+
+JSON:
+
+{broken_json}
+"""
+
+    response = client.chat.completions.create(
+        model=model_name,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a JSON repair tool. "
+                    "Return valid JSON only."
+                )
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        temperature=0
+    )
+
+    repaired = response.choices[0].message.content
+
+    cleaned = clean_json(
+        repaired
+    )
+
+    return json.loads(
+        cleaned
+    )
+
+
+def parse_json(
+    client,
+    model_name,
+    response_text
+):
+
+    cleaned = clean_json(
+        response_text
+    )
+
+    try:
+
+        return json.loads(
+            cleaned
+        )
+
+    except json.JSONDecodeError:
+
+        return repair_json(
+            client,
+            model_name,
+            cleaned
+        )
+
+
+# ============================================================
+# AI CV ANALYSIS
+# ============================================================
+
+def analyze_cv(
+    client,
+    model_name,
+    cv_text,
+    job_info
+):
+
+    prompt = f"""
+You are a professional recruitment screening assistant.
+
+Analyze the following CV for the specified job.
+
+IMPORTANT:
+
+- Use ONLY information from the CV.
+- Do not invent information.
+- Return ONLY valid JSON.
+- Do not use Markdown.
+- Do not use code fences.
+- years_relevant_experience must be a number.
+- Education must be returned as objects containing degree,
+  institution and year where available.
+
+JOB TITLE:
+{job_info["job_title"]}
+
+MINIMUM EXPERIENCE:
+{job_info["min_experience"]} years
+
+JOB DESCRIPTION:
+{job_info["job_description"]}
+
+REQUIRED KEYWORDS:
+{", ".join(job_info["keywords"])}
+
+RETURN EXACTLY THIS STRUCTURE:
+
+{{
+    "candidate_name": "Full Name",
+    "education": [
+        {{
+            "degree": "Degree",
+            "institution": "Institution",
+            "year": "Year"
+        }}
+    ],
+    "years_relevant_experience": 0,
+    "previous_roles": [],
+    "technical_skills": [],
+    "software_tools": [],
+    "certifications": [],
+    "relevant_experience_evidence": [],
+    "strengths": [],
+    "potential_gaps": []
+}}
+
+CV:
+
+{cv_text}
+"""
+
+    response = client.chat.completions.create(
+        model=model_name,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a recruitment screening assistant. "
+                    "Return only valid JSON."
+                )
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        temperature=0
+    )
+
+    response_text = (
+        response.choices[0].message.content
+    )
+
+    return parse_json(
+        client,
+        model_name,
+        response_text
+    )
+
+
+# ============================================================
+# SCORING
+# ============================================================
+
+def experience_score(
     years,
     minimum
 ):
@@ -749,80 +677,66 @@ def calculate_experience_score(
     )
 
     if years >= minimum + 4:
-
         return 100
 
-    elif years >= minimum + 2:
-
+    if years >= minimum + 2:
         return 90
 
-    elif years >= minimum:
-
+    if years >= minimum:
         return 75
 
-    elif years >= max(
+    if years >= max(
         0,
         minimum - 1
     ):
-
         return 50
 
-    elif years > 0:
-
+    if years > 0:
         return 30
 
     return 0
 
 
-# ============================================================
-# EDUCATION SCORING
-# ============================================================
-
-def calculate_education_score(
+def education_score(
     education
 ):
 
-    education_list = safe_list(
-        education
-    )
-
-    if not education_list:
-
-        return 0
-
-    text = normalize_text(
-        " ".join(
-            safe_string(x)
-            for x in education_list
+    education_text = normalize_text(
+        safe_join(
+            education
         )
     )
+
+    if not education_text:
+
+        return 0
 
     score = 50
 
     if (
-        "water resources" in text
-        or "hydrology" in text
-        or "hydraulic" in text
+        "water resources" in education_text
+        or "hydrology" in education_text
+        or "hydraulic" in education_text
     ):
 
         score = 95
 
-    elif "civil engineering" in text:
+    elif "civil engineering" in education_text:
 
         score = 80
 
-    elif "environmental engineering" in text:
+    elif "environmental engineering" in education_text:
 
         score = 75
 
-    elif "engineering" in text:
+    elif "engineering" in education_text:
 
         score = 70
 
     if (
-        "master" in text
-        or "msc" in text
-        or "m.sc" in text
+        "master" in education_text
+        or "msc" in education_text
+        or "m.sc" in education_text
     ):
 
         score = min(
@@ -833,11 +747,7 @@ def calculate_education_score(
     return score
 
 
-# ============================================================
-# CERTIFICATION SCORING
-# ============================================================
-
-def calculate_certification_score(
+def certification_score(
     certifications
 ):
 
@@ -847,122 +757,90 @@ def calculate_certification_score(
 
     valid = []
 
-    for item in certifications:
+    for certification in certifications:
 
-        value = safe_string(
-            item
+        text = safe_string(
+            certification
         ).lower()
 
-        if value not in [
+        if text not in [
             "",
             "none",
-            "not specified",
             "n/a",
-            "na"
+            "na",
+            "not specified"
         ]:
 
             valid.append(
-                value
+                text
             )
 
     if valid:
-
         return 100
 
     return 0
 
 
-# ============================================================
-# COMPLETE CANDIDATE SCORING
-# ============================================================
-
-def calculate_candidate_scores(
+def calculate_scores(
     candidate,
     job_info,
     weights
 ):
 
-    required_keywords = job_info[
-        "keywords"
-    ]
-
     # --------------------------------------------------------
-    # KEYWORDS
+    # MATCH KEYWORDS DIRECTLY FROM FULL CV
     # --------------------------------------------------------
 
     matched_keywords, missing_keywords = (
-        find_matched_keywords(
-            candidate,
-            required_keywords
-        )
-    )
-
-    # --------------------------------------------------------
-    # EXPERIENCE
-    # --------------------------------------------------------
-
-    experience_score = (
-        calculate_experience_score(
+        find_keywords_in_cv(
             candidate.get(
-                "years_relevant_experience",
-                0
+                "cv_text",
+                ""
             ),
-            job_info[
-                "min_experience"
-            ]
+            job_info["keywords"]
         )
     )
 
     # --------------------------------------------------------
-    # TECHNICAL
+    # COMPONENT SCORES
     # --------------------------------------------------------
 
-    technical_score = (
-        calculate_keyword_score(
-            matched_keywords,
-            required_keywords
+    exp_score = experience_score(
+        candidate.get(
+            "years_relevant_experience",
+            0
+        ),
+        job_info[
+            "min_experience"
+        ]
+    )
+
+    technical_score_value = keyword_score(
+        matched_keywords,
+        job_info["keywords"]
+    )
+
+    education_score_value = education_score(
+        candidate.get(
+            "education",
+            []
+        )
+    )
+
+    requirement_score_value = keyword_score(
+        matched_keywords,
+        job_info["keywords"]
+    )
+
+    certification_score_value = certification_score(
+        candidate.get(
+            "certifications",
+            []
         )
     )
 
     # --------------------------------------------------------
-    # EDUCATION
-    # --------------------------------------------------------
-
-    education_score = (
-        calculate_education_score(
-            candidate.get(
-                "education",
-                []
-            )
-        )
-    )
-
-    # --------------------------------------------------------
-    # JOB REQUIREMENTS
-    # --------------------------------------------------------
-
-    requirement_score = (
-        calculate_keyword_score(
-            matched_keywords,
-            required_keywords
-        )
-    )
-
-    # --------------------------------------------------------
-    # CERTIFICATION
-    # --------------------------------------------------------
-
-    certification_score = (
-        calculate_certification_score(
-            candidate.get(
-                "certifications",
-                []
-            )
-        )
-    )
-
-    # --------------------------------------------------------
-    # WEIGHTED CALCULATION
+    # WEIGHTED SCORE
     # --------------------------------------------------------
 
     total_weight = (
@@ -974,78 +852,62 @@ def calculate_candidate_scores(
     )
 
     if total_weight <= 0:
-
         total_weight = 1
 
-    experience_contribution = (
-        experience_score
+    exp_contribution = (
+        exp_score
         * weights["experience"]
         / total_weight
     )
 
     technical_contribution = (
-        technical_score
+        technical_score_value
         * weights["technical"]
         / total_weight
     )
 
     education_contribution = (
-        education_score
+        education_score_value
         * weights["education"]
         / total_weight
     )
 
-    requirements_contribution = (
-        requirement_score
+    requirement_contribution = (
+        requirement_score_value
         * weights["requirements"]
         / total_weight
     )
 
     certification_contribution = (
-        certification_score
+        certification_score_value
         * weights["certification"]
         / total_weight
     )
 
-    overall_score = (
-        experience_contribution
+    overall = (
+        exp_contribution
         + technical_contribution
         + education_contribution
-        + requirements_contribution
+        + requirement_contribution
         + certification_contribution
     )
 
     return {
 
         "experience_score":
-            round(
-                experience_score,
-                2
-            ),
+            round(exp_score, 2),
 
         "technical_score":
-            round(
-                technical_score,
-                2
-            ),
+            round(technical_score_value, 2),
 
         "education_score":
-            round(
-                education_score,
-                2
-            ),
+            round(education_score_value, 2),
 
         "requirement_score":
-            round(
-                requirement_score,
-                2
-            ),
+            round(requirement_score_value, 2),
 
         "certification_score":
-            round(
-                certification_score,
-                2
-            ),
+            round(certification_score_value, 2),
 
         "matched_keywords":
             matched_keywords,
@@ -1055,7 +917,7 @@ def calculate_candidate_scores(
 
         "experience_contribution":
             round(
-                experience_contribution,
+                exp_contribution,
                 2
             ),
 
@@ -1073,7 +935,7 @@ def calculate_candidate_scores(
 
         "requirements_contribution":
             round(
-                requirements_contribution,
+                requirement_contribution,
                 2
             ),
 
@@ -1085,14 +947,14 @@ def calculate_candidate_scores(
 
         "overall_score":
             round(
-                overall_score,
+                overall,
                 2
             )
     }
 
 
 # ============================================================
-# RECALCULATE RESULTS
+# RECALCULATE ALL CANDIDATES
 # ============================================================
 
 def recalculate_results():
@@ -1121,12 +983,10 @@ def recalculate_results():
         st.session_state.candidate_data
     ):
 
-        scores = (
-            calculate_candidate_scores(
-                candidate,
-                st.session_state.job_info,
-                weights
-            )
+        scores = calculate_scores(
+            candidate,
+            st.session_state.job_info,
+            weights
         )
 
         result = candidate.copy()
@@ -1139,20 +999,17 @@ def recalculate_results():
             result
         )
 
-    # Highest score first
     results.sort(
-        key=lambda x:
-            x["overall_score"],
+        key=lambda x: x["overall_score"],
         reverse=True
     )
 
-    # Assign ranking
-    for index, candidate in enumerate(
+    for index, result in enumerate(
         results,
         start=1
     ):
 
-        candidate["rank"] = index
+        result["rank"] = index
 
     return results
 
@@ -1182,11 +1039,6 @@ st.sidebar.markdown("---")
 
 st.sidebar.header(
     "⚖️ Scoring Weightage"
-)
-
-st.sidebar.caption(
-    "These weights determine how much each factor contributes "
-    "to the final candidate score."
 )
 
 st.sidebar.slider(
@@ -1241,9 +1093,8 @@ st.sidebar.markdown(
     f"### Total Weight: **{total_weight}%**"
 )
 
-st.sidebar.info(
-    "Weights are automatically normalized, so they do not "
-    "have to total exactly 100%."
+st.sidebar.caption(
+    "Weights are automatically normalized."
 )
 
 
@@ -1261,15 +1112,14 @@ with col1:
 
     job_title = st.text_input(
         "Job Title",
-        placeholder="e.g., Senior Hydrologist"
+        placeholder="e.g. Senior Hydrologist"
     )
 
     min_experience = st.number_input(
         "Minimum Relevant Experience (Years)",
         min_value=0,
         max_value=50,
-        value=3,
-        step=1
+        value=3
     )
 
 with col2:
@@ -1283,11 +1133,7 @@ with col2:
 
     job_description = st.text_area(
         "Job Description",
-        height=150,
-        placeholder=(
-            "Describe the responsibilities, qualifications "
-            "and technical requirements."
-        )
+        height=150
     )
 
 
@@ -1307,7 +1153,7 @@ st.header(
 )
 
 uploaded_files = st.file_uploader(
-    "Upload multiple CVs",
+    "Upload multiple PDF or Word CVs",
     type=[
         "pdf",
         "docx"
@@ -1317,21 +1163,21 @@ uploaded_files = st.file_uploader(
 
 
 # ============================================================
-# ANALYSIS
+# ANALYZE
 # ============================================================
 
 st.header(
     "3️⃣ Analyze Candidates"
 )
 
-analyze_button = st.button(
+analyze = st.button(
     "🚀 Analyze CVs",
     type="primary",
     use_container_width=True
 )
 
 
-if analyze_button:
+if analyze:
 
     if not api_key:
 
@@ -1342,13 +1188,13 @@ if analyze_button:
     elif not uploaded_files:
 
         st.error(
-            "Please upload at least one CV."
+            "Please upload CVs."
         )
 
     elif not job_title:
 
         st.error(
-            "Please enter the Job Title."
+            "Please enter the job title."
         )
 
     else:
@@ -1359,7 +1205,7 @@ if analyze_button:
                 api_key=api_key
             )
 
-            job_info = {
+            st.session_state.job_info = {
 
                 "job_title":
                     job_title,
@@ -1374,11 +1220,6 @@ if analyze_button:
                     required_keywords
             }
 
-            st.session_state.job_info = (
-                job_info
-            )
-
-            # Reset previous analysis
             st.session_state.candidate_data = []
 
             st.session_state.analysis_errors = []
@@ -1389,11 +1230,11 @@ if analyze_button:
 
             status = st.empty()
 
-            total_files = len(
+            total = len(
                 uploaded_files
             )
 
-            for index, uploaded_file in enumerate(
+            for i, uploaded_file in enumerate(
                 uploaded_files
             ):
 
@@ -1409,7 +1250,7 @@ if analyze_button:
 
                     if not cv_text.strip():
 
-                        raise Exception(
+                        raise ValueError(
                             "No readable text found in CV."
                         )
 
@@ -1417,10 +1258,19 @@ if analyze_button:
                         client,
                         model_name,
                         cv_text,
-                        job_info
+                        st.session_state.job_info
                     )
 
-                    # Normalize AI output fields
+                    # Normalize candidate data
+                    candidate["candidate_name"] = (
+                        safe_string(
+                            candidate.get(
+                                "candidate_name",
+                                "Not specified"
+                            )
+                        )
+                    )
+
                     candidate["education"] = safe_list(
                         candidate.get(
                             "education",
@@ -1480,24 +1330,6 @@ if analyze_button:
                     )
 
                     candidate[
-                        "required_keywords_found"
-                    ] = safe_list(
-                        candidate.get(
-                            "required_keywords_found",
-                            []
-                        )
-                    )
-
-                    candidate[
-                        "required_keywords_missing"
-                    ] = safe_list(
-                        candidate.get(
-                            "required_keywords_missing",
-                            []
-                        )
-                    )
-
-                    candidate[
                         "years_relevant_experience"
                     ] = safe_number(
                         candidate.get(
@@ -1506,12 +1338,12 @@ if analyze_button:
                         )
                     )
 
+                    # VERY IMPORTANT:
+                    # Store complete CV text for reliable keyword matching
+                    candidate["cv_text"] = cv_text
+
                     candidate["cv_file"] = (
                         uploaded_file.name
-                    )
-
-                    candidate["cv_text"] = (
-                        cv_text
                     )
 
                     st.session_state.candidate_data.append(
@@ -1531,8 +1363,7 @@ if analyze_button:
                     )
 
                 progress.progress(
-                    (index + 1)
-                    / total_files
+                    (i + 1) / total
                 )
 
             st.session_state.processed = True
@@ -1544,18 +1375,18 @@ if analyze_button:
         except Exception as e:
 
             st.error(
-                f"Could not initialize Groq: {str(e)}"
+                f"Unable to start AI analysis: {str(e)}"
             )
 
 
 # ============================================================
-# ANALYSIS ERRORS
+# ERRORS
 # ============================================================
 
 if st.session_state.analysis_errors:
 
     st.warning(
-        "Some CVs could not be processed."
+        "The following CVs could not be processed:"
     )
 
     for error in (
@@ -1563,7 +1394,7 @@ if st.session_state.analysis_errors:
     ):
 
         st.error(
-            f"{error['file']}: {error['error']}"
+            f"{error['file']} — {error['error']}"
         )
 
 
@@ -1574,7 +1405,6 @@ if st.session_state.analysis_errors:
 if (
     st.session_state.processed
     and st.session_state.candidate_data
-    and st.session_state.job_info
 ):
 
     results = recalculate_results()
@@ -1585,51 +1415,10 @@ if (
         "📊 Candidate Ranking"
     )
 
-    # ========================================================
-    # CURRENT WEIGHTS
-    # ========================================================
-
-    st.subheader(
-        "Current Scoring Weights"
-    )
-
-    weight_df = pd.DataFrame(
-        {
-            "Scoring Factor": [
-                "Relevant Experience",
-                "Technical Skills",
-                "Education",
-                "Job Requirements",
-                "Certifications"
-            ],
-
-            "Weight (%)": [
-                st.session_state.weight_experience,
-                st.session_state.weight_technical,
-                st.session_state.weight_education,
-                st.session_state.weight_requirements,
-                st.session_state.weight_certification
-            ]
-        }
-    )
-
-    st.dataframe(
-        weight_df,
-        use_container_width=True,
-        hide_index=True
-    )
-
-    st.caption(
-        "Changing the weights recalculates scores locally. "
-        "The CVs are not sent to the AI again."
-    )
-
 
     # ========================================================
-    # DASHBOARD METRICS
+    # METRICS
     # ========================================================
-
-    col1, col2, col3, col4 = st.columns(4)
 
     average_score = (
         sum(
@@ -1644,22 +1433,24 @@ if (
         for x in results
     )
 
-    col1.metric(
-        "Candidates Analyzed",
+    c1, c2, c3, c4 = st.columns(4)
+
+    c1.metric(
+        "Candidates",
         len(results)
     )
 
-    col2.metric(
+    c2.metric(
         "Average Score",
         f"{average_score:.1f}%"
     )
 
-    col3.metric(
+    c3.metric(
         "Highest Score",
         f"{highest_score:.1f}%"
     )
 
-    col4.metric(
+    c4.metric(
         "Required Keywords",
         len(required_keywords)
     )
@@ -1669,11 +1460,15 @@ if (
     # RANKING TABLE
     # ========================================================
 
-    ranking_data = []
+    st.subheader(
+        "🏆 Candidate Ranking"
+    )
+
+    ranking_rows = []
 
     for candidate in results:
 
-        ranking_data.append(
+        ranking_rows.append(
             {
                 "Rank":
                     candidate["rank"],
@@ -1686,7 +1481,7 @@ if (
                         )
                     ),
 
-                "CV File":
+                "CV":
                     safe_string(
                         candidate.get(
                             "cv_file",
@@ -1700,38 +1495,36 @@ if (
                 "Experience":
                     candidate["experience_score"],
 
-                "Technical Skills":
+                "Technical":
                     candidate["technical_score"],
 
                 "Education":
                     candidate["education_score"],
 
-                "Job Requirements":
+                "Requirements":
                     candidate["requirement_score"],
 
-                "Certifications":
+                "Certification":
                     candidate["certification_score"],
 
                 "Matched Keywords":
                     safe_join(
-                        candidate.get(
-                            "matched_keywords",
-                            []
-                        )
+                        candidate[
+                            "matched_keywords"
+                        ]
                     ),
 
                 "Missing Keywords":
                     safe_join(
-                        candidate.get(
-                            "missing_keywords",
-                            []
-                        )
+                        candidate[
+                            "missing_keywords"
+                        ]
                     )
             }
         )
 
     ranking_df = pd.DataFrame(
-        ranking_data
+        ranking_rows
     )
 
     st.dataframe(
@@ -1742,26 +1535,98 @@ if (
 
 
     # ========================================================
+    # KEYWORD STATUS
+    # ========================================================
+
+    st.subheader(
+        "🔑 Keyword Matching"
+    )
+
+    st.info(
+        "Keyword matching is performed directly against the complete "
+        "CV text. It does not depend on the AI's extracted skill list."
+    )
+
+    keyword_rows = []
+
+    for candidate in results:
+
+        matched = candidate[
+            "matched_keywords"
+        ]
+
+        missing = candidate[
+            "missing_keywords"
+        ]
+
+        keyword_rows.append(
+            {
+                "Rank":
+                    candidate["rank"],
+
+                "Candidate":
+                    safe_string(
+                        candidate.get(
+                            "candidate_name",
+                            "Not specified"
+                        )
+                    ),
+
+                "Matched":
+                    safe_join(
+                        matched
+                    ),
+
+                "Missing":
+                    safe_join(
+                        missing
+                    ),
+
+                "Matched Count":
+                    len(matched),
+
+                "Missing Count":
+                    len(missing),
+
+                "Match %":
+                    candidate[
+                        "requirement_score"
+                    ]
+            }
+        )
+
+    keyword_df = pd.DataFrame(
+        keyword_rows
+    )
+
+    st.dataframe(
+        keyword_df,
+        use_container_width=True,
+        hide_index=True
+    )
+
+
+    # ========================================================
     # SCORE COMPARISON
     # ========================================================
 
     st.subheader(
-        "📈 Candidate Score Comparison"
+        "📈 Overall Score Comparison"
     )
 
-    chart_df = ranking_df[
+    chart = ranking_df[
         [
             "Candidate",
             "Overall Score"
         ]
     ].copy()
 
-    chart_df = chart_df.set_index(
+    chart = chart.set_index(
         "Candidate"
     )
 
     st.bar_chart(
-        chart_df
+        chart
     )
 
 
@@ -1770,12 +1635,7 @@ if (
     # ========================================================
 
     st.subheader(
-        "⚖️ Weight Contribution Analysis"
-    )
-
-    st.caption(
-        "The contribution values show how much each factor "
-        "adds to the final score."
+        "⚖️ Weight Contribution"
     )
 
     contribution_rows = []
@@ -1792,32 +1652,32 @@ if (
                         )
                     ),
 
-                "Experience Contribution":
+                "Experience":
                     candidate[
                         "experience_contribution"
                     ],
 
-                "Technical Contribution":
+                "Technical":
                     candidate[
                         "technical_contribution"
                     ],
 
-                "Education Contribution":
+                "Education":
                     candidate[
                         "education_contribution"
                     ],
 
-                "Requirements Contribution":
+                "Requirements":
                     candidate[
                         "requirements_contribution"
                     ],
 
-                "Certification Contribution":
+                "Certification":
                     candidate[
                         "certification_contribution"
                     ],
 
-                "Overall Score":
+                "Overall":
                     candidate[
                         "overall_score"
                     ]
@@ -1836,7 +1696,7 @@ if (
 
 
     # ========================================================
-    # DETAILED ANALYSIS
+    # DETAILED CANDIDATE
     # ========================================================
 
     st.markdown("---")
@@ -1845,23 +1705,22 @@ if (
         "🔎 Detailed Candidate Analysis"
     )
 
-    candidate_names = []
-
-    for candidate in results:
-
-        candidate_names.append(
-            f"{candidate['rank']}. "
-            f"{safe_string(candidate.get('candidate_name', 'Not specified'))}"
+    candidate_options = [
+        (
+            f"{x['rank']}. "
+            f"{safe_string(x.get('candidate_name', 'Not specified'))}"
         )
+        for x in results
+    ]
 
-    selected_candidate_name = st.selectbox(
+    selected = st.selectbox(
         "Select Candidate",
-        candidate_names
+        candidate_options
     )
 
     selected_index = (
-        candidate_names.index(
-            selected_candidate_name
+        candidate_options.index(
+            selected
         )
     )
 
@@ -1874,25 +1733,25 @@ if (
     # CANDIDATE SUMMARY
     # ========================================================
 
-    col1, col2, col3 = st.columns(3)
+    c1, c2, c3 = st.columns(3)
 
-    col1.metric(
+    c1.metric(
         "Overall Score",
         f"{candidate['overall_score']:.1f}%"
     )
 
-    col2.metric(
+    c2.metric(
         "Rank",
         f"#{candidate['rank']}"
     )
 
-    col3.metric(
+    c3.metric(
         "Relevant Experience",
-        f"{safe_number(candidate.get('years_relevant_experience', 0)):.1f} years"
+        f"{candidate['years_relevant_experience']:.1f} years"
     )
 
     st.write(
-        f"**CV File:** {safe_string(candidate.get('cv_file', ''))}"
+        f"**CV:** {candidate['cv_file']}"
     )
 
 
@@ -1904,7 +1763,7 @@ if (
         "Score Breakdown"
     )
 
-    score_breakdown = pd.DataFrame(
+    score_df = pd.DataFrame(
         {
             "Factor": [
                 "Experience",
@@ -1969,79 +1828,14 @@ if (
     )
 
     st.dataframe(
-        score_breakdown,
+        score_df,
         use_container_width=True,
         hide_index=True
     )
 
 
     # ========================================================
-    # KEYWORD MATCHING
-    # ========================================================
-
-    st.subheader(
-        "🔑 Keyword Matching"
-    )
-
-    matched = safe_list(
-        candidate.get(
-            "matched_keywords",
-            []
-        )
-    )
-
-    missing = safe_list(
-        candidate.get(
-            "missing_keywords",
-            []
-        )
-    )
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-
-        st.markdown(
-            "### ✅ Matched Keywords"
-        )
-
-        if matched:
-
-            for keyword in matched:
-
-                st.success(
-                    safe_string(keyword)
-                )
-
-        else:
-
-            st.write(
-                "No required keywords matched."
-            )
-
-    with col2:
-
-        st.markdown(
-            "### ❌ Missing Keywords"
-        )
-
-        if missing:
-
-            for keyword in missing:
-
-                st.error(
-                    safe_string(keyword)
-                )
-
-        else:
-
-            st.success(
-                "All required keywords matched."
-            )
-
-
-    # ========================================================
-    # CANDIDATE INFORMATION
+    # MATCHED / MISSING KEYWORDS
     # ========================================================
 
     col1, col2 = st.columns(2)
@@ -2049,30 +1843,140 @@ if (
     with col1:
 
         st.subheader(
-            "🎓 Education"
+            "✅ Matched Keywords"
         )
 
-        education = safe_list(
-            candidate.get(
-                "education",
-                []
-            )
-        )
+        if candidate[
+            "matched_keywords"
+        ]:
 
-        if education:
+            for keyword in candidate[
+                "matched_keywords"
+            ]:
 
-            for item in education:
-
-                st.write(
-                    f"• {safe_string(item)}"
+                st.success(
+                    keyword
                 )
 
         else:
 
             st.write(
-                "Not specified"
+                "No required keywords found."
             )
 
+    with col2:
+
+        st.subheader(
+            "❌ Missing Keywords"
+        )
+
+        if candidate[
+            "missing_keywords"
+        ]:
+
+            for keyword in candidate[
+                "missing_keywords"
+            ]:
+
+                st.error(
+                    keyword
+                )
+
+        else:
+
+            st.success(
+                "All required keywords found."
+            )
+
+
+    # ========================================================
+    # EDUCATION
+    # ========================================================
+
+    st.subheader(
+        "🎓 Education"
+    )
+
+    education = safe_list(
+        candidate.get(
+            "education",
+            []
+        )
+    )
+
+    if education:
+
+        for item in education:
+
+            # Display dictionary education properly
+            if isinstance(item, dict):
+
+                degree = safe_string(
+                    item.get(
+                        "degree",
+                        ""
+                    )
+                )
+
+                institution = safe_string(
+                    item.get(
+                        "institution",
+                        ""
+                    )
+                )
+
+                year = safe_string(
+                    item.get(
+                        "year",
+                        ""
+                    )
+                )
+
+                text_parts = []
+
+                if degree:
+                    text_parts.append(
+                        degree
+                    )
+
+                if institution:
+                    text_parts.append(
+                        institution
+                    )
+
+                if year:
+                    text_parts.append(
+                        year
+                    )
+
+                st.write(
+                    "• "
+                    + " — ".join(
+                        text_parts
+                    )
+                )
+
+            else:
+
+                st.write(
+                    "• "
+                    + safe_string(item)
+                )
+
+    else:
+
+        st.write(
+            "Not specified."
+        )
+
+
+    # ========================================================
+    # TECHNICAL INFORMATION
+    # ========================================================
+
+    col1, col2 = st.columns(2)
+
+    with col1:
 
         st.subheader(
             "🛠 Technical Skills"
@@ -2090,15 +1994,18 @@ if (
             for item in skills:
 
                 st.write(
-                    f"• {safe_string(item)}"
+                    "• "
+                    + safe_string(item)
                 )
 
         else:
 
             st.write(
-                "Not specified"
+                "Not specified."
             )
 
+
+    with col2:
 
         st.subheader(
             "💻 Software / Tools"
@@ -2116,13 +2023,49 @@ if (
             for item in software:
 
                 st.write(
-                    f"• {safe_string(item)}"
+                    "• "
+                    + safe_string(item)
                 )
 
         else:
 
             st.write(
-                "Not specified"
+                "Not specified."
+            )
+
+
+    # ========================================================
+    # OTHER INFORMATION
+    # ========================================================
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        st.subheader(
+            "💼 Previous Roles"
+        )
+
+        roles = safe_list(
+            candidate.get(
+                "previous_roles",
+                []
+            )
+        )
+
+        if roles:
+
+            for item in roles:
+
+                st.write(
+                    "• "
+                    + safe_string(item)
+                )
+
+        else:
+
+            st.write(
+                "Not specified."
             )
 
 
@@ -2142,43 +2085,18 @@ if (
             for item in certifications:
 
                 st.write(
-                    f"• {safe_string(item)}"
+                    "• "
+                    + safe_string(item)
                 )
 
         else:
 
             st.write(
-                "Not specified"
+                "Not specified."
             )
 
 
     with col2:
-
-        st.subheader(
-            "💼 Previous Roles"
-        )
-
-        roles = safe_list(
-            candidate.get(
-                "previous_roles",
-                []
-            )
-        )
-
-        if roles:
-
-            for item in roles:
-
-                st.write(
-                    f"• {safe_string(item)}"
-                )
-
-        else:
-
-            st.write(
-                "Not specified"
-            )
-
 
         st.subheader(
             "📌 Relevant Experience Evidence"
@@ -2196,18 +2114,19 @@ if (
             for item in evidence:
 
                 st.write(
-                    f"• {safe_string(item)}"
+                    "• "
+                    + safe_string(item)
                 )
 
         else:
 
             st.write(
-                "Not specified"
+                "Not specified."
             )
 
 
     # ========================================================
-    # STRENGTHS AND GAPS
+    # STRENGTHS / GAPS
     # ========================================================
 
     col1, col2 = st.columns(2)
@@ -2236,7 +2155,7 @@ if (
         else:
 
             st.write(
-                "No specific strengths identified."
+                "Not specified."
             )
 
 
@@ -2275,36 +2194,27 @@ if (
     st.markdown("---")
 
     st.header(
-        "📥 Export Results"
+        "📥 Download Results"
     )
 
-    # --------------------------------------------------------
-    # Ranking sheet
-    # --------------------------------------------------------
-
+    # Ranking
     export_ranking = ranking_df.copy()
 
-    # --------------------------------------------------------
     # Candidate details
-    # --------------------------------------------------------
-
-    export_details = []
+    details_rows = []
 
     for candidate in results:
 
-        export_details.append(
+        details_rows.append(
             {
                 "Rank":
-                    candidate.get(
-                        "rank",
-                        ""
-                    ),
+                    candidate["rank"],
 
                 "Candidate":
                     safe_string(
                         candidate.get(
                             "candidate_name",
-                            "Not specified"
+                            ""
                         )
                     ),
 
@@ -2317,93 +2227,52 @@ if (
                     ),
 
                 "Overall Score":
-                    candidate.get(
-                        "overall_score",
-                        0
-                    ),
+                    candidate[
+                        "overall_score"
+                    ],
 
                 "Relevant Experience (Years)":
-                    safe_number(
-                        candidate.get(
-                            "years_relevant_experience",
-                            0
-                        )
-                    ),
+                    candidate[
+                        "years_relevant_experience"
+                    ],
 
                 "Experience Score":
-                    candidate.get(
-                        "experience_score",
-                        0
-                    ),
+                    candidate[
+                        "experience_score"
+                    ],
 
                 "Technical Score":
-                    candidate.get(
-                        "technical_score",
-                        0
-                    ),
+                    candidate[
+                        "technical_score"
+                    ],
 
                 "Education Score":
-                    candidate.get(
-                        "education_score",
-                        0
-                    ),
+                    candidate[
+                        "education_score"
+                    ],
 
-                "Requirement Score":
-                    candidate.get(
-                        "requirement_score",
-                        0
-                    ),
+                "Job Requirements Score":
+                    candidate[
+                        "requirement_score"
+                    ],
 
                 "Certification Score":
-                    candidate.get(
-                        "certification_score",
-                        0
-                    ),
-
-                "Experience Contribution":
-                    candidate.get(
-                        "experience_contribution",
-                        0
-                    ),
-
-                "Technical Contribution":
-                    candidate.get(
-                        "technical_contribution",
-                        0
-                    ),
-
-                "Education Contribution":
-                    candidate.get(
-                        "education_contribution",
-                        0
-                    ),
-
-                "Requirements Contribution":
-                    candidate.get(
-                        "requirements_contribution",
-                        0
-                    ),
-
-                "Certification Contribution":
-                    candidate.get(
-                        "certification_contribution",
-                        0
-                    ),
+                    candidate[
+                        "certification_score"
+                    ],
 
                 "Matched Keywords":
                     safe_join(
-                        candidate.get(
-                            "matched_keywords",
-                            []
-                        )
+                        candidate[
+                            "matched_keywords"
+                        ]
                     ),
 
                 "Missing Keywords":
                     safe_join(
-                        candidate.get(
-                            "missing_keywords",
-                            []
-                        )
+                        candidate[
+                            "missing_keywords"
+                        ]
                     ),
 
                 "Education":
@@ -2446,7 +2315,7 @@ if (
                         )
                     ),
 
-                "Relevant Experience Evidence":
+                "Experience Evidence":
                     safe_join(
                         candidate.get(
                             "relevant_experience_evidence",
@@ -2473,15 +2342,12 @@ if (
         )
 
     details_df = pd.DataFrame(
-        export_details
+        details_rows
     )
 
 
-    # --------------------------------------------------------
-    # Scoring weights sheet
-    # --------------------------------------------------------
-
-    weight_export = pd.DataFrame(
+    # Weights
+    weights_df = pd.DataFrame(
         {
             "Scoring Factor": [
                 "Relevant Experience",
@@ -2502,41 +2368,29 @@ if (
     )
 
 
-    # --------------------------------------------------------
     # Keyword sheet
-    # --------------------------------------------------------
-
-    keyword_export = []
+    keyword_rows = []
 
     for candidate in results:
 
-        matched = safe_list(
-            candidate.get(
-                "matched_keywords",
-                []
-            )
-        )
+        matched = candidate[
+            "matched_keywords"
+        ]
 
-        missing = safe_list(
-            candidate.get(
-                "missing_keywords",
-                []
-            )
-        )
+        missing = candidate[
+            "missing_keywords"
+        ]
 
-        keyword_export.append(
+        keyword_rows.append(
             {
                 "Rank":
-                    candidate.get(
-                        "rank",
-                        ""
-                    ),
+                    candidate["rank"],
 
                 "Candidate":
                     safe_string(
                         candidate.get(
                             "candidate_name",
-                            "Not specified"
+                            ""
                         )
                     ),
 
@@ -2545,7 +2399,7 @@ if (
                         matched
                     ),
 
-                "Number Matched":
+                "Matched Count":
                     len(matched),
 
                 "Missing Keywords":
@@ -2553,78 +2407,80 @@ if (
                         missing
                     ),
 
-                "Number Missing":
+                "Missing Count":
                     len(missing),
 
                 "Total Required":
                     len(required_keywords),
 
                 "Keyword Match %":
-                    candidate.get(
-                        "requirement_score",
-                        0
-                    )
+                    candidate[
+                        "requirement_score"
+                    ]
             }
         )
 
-    keyword_df = pd.DataFrame(
-        keyword_export
+    keyword_export_df = pd.DataFrame(
+        keyword_rows
     )
 
 
     # --------------------------------------------------------
-    # Create Excel workbook
+    # CREATE EXCEL
     # --------------------------------------------------------
 
-    excel_buffer = BytesIO()
+    try:
 
-    with pd.ExcelWriter(
-        excel_buffer,
-        engine="openpyxl"
-    ) as writer:
+        excel_buffer = BytesIO()
 
-        export_ranking.to_excel(
-            writer,
-            sheet_name="Candidate Ranking",
-            index=False
+        with pd.ExcelWriter(
+            excel_buffer,
+            engine="openpyxl"
+        ) as writer:
+
+            export_ranking.to_excel(
+                writer,
+                sheet_name="Candidate Ranking",
+                index=False
+            )
+
+            details_df.to_excel(
+                writer,
+                sheet_name="Candidate Details",
+                index=False
+            )
+
+            weights_df.to_excel(
+                writer,
+                sheet_name="Scoring Weights",
+                index=False
+            )
+
+            keyword_export_df.to_excel(
+                writer,
+                sheet_name="Keyword Matching",
+                index=False
+            )
+
+        excel_buffer.seek(0)
+
+        st.download_button(
+            label="📊 Download Excel Results",
+            data=excel_buffer.getvalue(),
+            file_name="HireTech_AI_Results.xlsx",
+            mime=(
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+            use_container_width=True
         )
 
-        details_df.to_excel(
-            writer,
-            sheet_name="Candidate Details",
-            index=False
+    except Exception as e:
+
+        st.error(
+            "Excel file could not be generated. "
+            f"Please check the data format. Details: {str(e)}"
         )
-
-        weight_export.to_excel(
-            writer,
-            sheet_name="Scoring Weights",
-            index=False
-        )
-
-        keyword_df.to_excel(
-            writer,
-            sheet_name="Keyword Matching",
-            index=False
-        )
-
-
-    excel_buffer.seek(0)
-
-
-    # --------------------------------------------------------
-    # Download button
-    # --------------------------------------------------------
-
-    st.download_button(
-        label="📊 Download Excel Ranking",
-        data=excel_buffer.getvalue(),
-        file_name="HireTech_AI_Candidate_Ranking.xlsx",
-        mime=(
-            "application/vnd.openxmlformats-officedocument."
-            "spreadsheetml.sheet"
-        ),
-        use_container_width=True
-    )
 
 
 # ============================================================
