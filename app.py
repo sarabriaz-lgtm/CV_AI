@@ -40,6 +40,11 @@ st.markdown("""
     margin-bottom: 25px;
 }
 
+.section-title {
+    font-size: 24px;
+    font-weight: 600;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -65,11 +70,14 @@ st.markdown(
 # SESSION STATE
 # ============================================================
 
-if "results" not in st.session_state:
-    st.session_state.results = []
+if "candidate_data" not in st.session_state:
+    st.session_state.candidate_data = []
 
 if "processed" not in st.session_state:
     st.session_state.processed = False
+
+if "analysis_errors" not in st.session_state:
+    st.session_state.analysis_errors = []
 
 
 # ============================================================
@@ -97,41 +105,46 @@ with st.sidebar:
 
     st.divider()
 
-    st.subheader("Scoring Weights")
+    st.subheader("⚖️ Scoring Weights")
 
     experience_weight = st.slider(
         "Relevant Experience",
-        0,
-        100,
-        30
+        min_value=0,
+        max_value=100,
+        value=30,
+        key="experience_weight"
     )
 
     technical_weight = st.slider(
         "Technical Skills",
-        0,
-        100,
-        30
+        min_value=0,
+        max_value=100,
+        value=30,
+        key="technical_weight"
     )
 
     education_weight = st.slider(
         "Education",
-        0,
-        100,
-        15
+        min_value=0,
+        max_value=100,
+        value=15,
+        key="education_weight"
     )
 
     requirements_weight = st.slider(
         "Job Requirements",
-        0,
-        100,
-        15
+        min_value=0,
+        max_value=100,
+        value=15,
+        key="requirements_weight"
     )
 
     certification_weight = st.slider(
         "Certifications",
-        0,
-        100,
-        10
+        min_value=0,
+        max_value=100,
+        value=10,
+        key="certification_weight"
     )
 
     total_weight = (
@@ -143,8 +156,19 @@ with st.sidebar:
     )
 
     st.info(
-        f"Total scoring weight: {total_weight}%"
+        f"Total Weight: {total_weight}%\n\n"
+        "Weights are automatically normalized to 100%."
     )
+
+    st.divider()
+
+    if st.session_state.processed:
+
+        st.success(
+            "Candidate data loaded.\n"
+            "Changing weights will recalculate scores "
+            "without calling the AI again."
+        )
 
     st.divider()
 
@@ -258,7 +282,7 @@ if uploaded_files:
 
 
 # ============================================================
-# PDF TEXT EXTRACTION
+# PDF EXTRACTION
 # ============================================================
 
 def extract_pdf_text(file):
@@ -278,7 +302,7 @@ def extract_pdf_text(file):
 
 
 # ============================================================
-# DOCX TEXT EXTRACTION
+# DOCX EXTRACTION
 # ============================================================
 
 def extract_docx_text(file):
@@ -287,7 +311,7 @@ def extract_docx_text(file):
 
     text = []
 
-    # Normal paragraphs
+    # Paragraphs
     for paragraph in doc.paragraphs:
 
         if paragraph.text.strip():
@@ -321,7 +345,7 @@ def extract_docx_text(file):
 
 
 # ============================================================
-# UNIVERSAL CV TEXT EXTRACTION
+# UNIVERSAL CV EXTRACTION
 # ============================================================
 
 def extract_cv_text(file):
@@ -339,13 +363,13 @@ def extract_cv_text(file):
     else:
 
         raise ValueError(
-            "Unsupported file type. "
+            "Unsupported file format. "
             "Only PDF and DOCX are supported."
         )
 
 
 # ============================================================
-# CLEAN AI JSON RESPONSE
+# CLEAN JSON RESPONSE
 # ============================================================
 
 def clean_json_response(response_text):
@@ -358,24 +382,26 @@ def clean_json_response(response_text):
 
     response_text = response_text.strip()
 
-    # Remove markdown JSON fences
+    # Remove Markdown code fences
     response_text = re.sub(
-        r"```json",
+        r"```json\s*",
         "",
         response_text,
         flags=re.IGNORECASE
     )
 
     response_text = re.sub(
-        r"```",
+        r"```\s*",
         "",
         response_text
     )
 
     response_text = response_text.strip()
 
-    # Locate JSON object
+    # Find first JSON object
     start = response_text.find("{")
+
+    # Find last JSON object
     end = response_text.rfind("}")
 
     if start == -1 or end == -1:
@@ -387,6 +413,112 @@ def clean_json_response(response_text):
     return response_text[
         start:end + 1
     ]
+
+
+# ============================================================
+# JSON REPAIR USING GROQ
+# ============================================================
+
+def parse_ai_json(
+    client,
+    model_name,
+    response_text
+):
+
+    cleaned = clean_json_response(
+        response_text
+    )
+
+    # --------------------------------------------------------
+    # FIRST ATTEMPT
+    # --------------------------------------------------------
+
+    try:
+
+        return json.loads(
+            cleaned
+        )
+
+    except json.JSONDecodeError as original_error:
+
+        pass
+
+    # --------------------------------------------------------
+    # SECOND ATTEMPT - AI JSON REPAIR
+    # --------------------------------------------------------
+
+    repair_prompt = f"""
+Repair the malformed JSON below.
+
+Return ONLY valid JSON.
+
+Do not:
+- Add explanations
+- Add Markdown
+- Use ```json
+- Remove information
+- Change the meaning
+- Add new candidate information
+
+Fix:
+- Missing commas
+- Incorrect quotes
+- Unclosed brackets
+- Unclosed braces
+- Invalid JSON syntax
+
+MALFORMED JSON:
+
+{cleaned}
+
+Return the corrected JSON only.
+"""
+
+    repair_response = client.chat.completions.create(
+
+        model=model_name,
+
+        messages=[
+            {
+                "role": "system",
+                "content":
+                "You are a JSON repair assistant. "
+                "Return only valid JSON."
+            },
+            {
+                "role": "user",
+                "content": repair_prompt
+            }
+        ],
+
+        temperature=0
+    )
+
+    repaired_text = (
+        repair_response
+        .choices[0]
+        .message
+        .content
+    )
+
+    repaired_cleaned = clean_json_response(
+        repaired_text
+    )
+
+    try:
+
+        return json.loads(
+            repaired_cleaned
+        )
+
+    except json.JSONDecodeError as repair_error:
+
+        raise ValueError(
+            "AI returned malformed JSON and "
+            "automatic repair failed.\n\n"
+            f"Original JSON error: {original_error}\n"
+            f"Repair error: {repair_error}"
+        )
 
 
 # ============================================================
@@ -429,20 +561,21 @@ IMPORTANT RULES:
 
 1. Use ONLY information contained in the CV.
 2. Do NOT invent information.
-3. Do NOT assume qualifications or experience.
-4. Estimate relevant experience only from documented employment history.
-5. Identify technical skills actually mentioned in the CV.
-6. Identify software/tools actually mentioned in the CV.
-7. Match required keywords against the actual CV.
-8. Put matched keywords in required_keywords_found.
-9. Put missing keywords in required_keywords_missing.
-10. Identify evidence supporting relevant experience.
-11. If information is unavailable, use "Not specified".
-12. years_relevant_experience must be a number.
-13. Return ONLY ONE JSON OBJECT.
-14. Do NOT use Markdown.
-15. Do NOT use ```json.
-16. Do NOT include explanations outside the JSON.
+3. Do NOT assume qualifications.
+4. Do NOT assume experience.
+5. Estimate relevant experience only from documented employment history.
+6. Identify technical skills actually mentioned in the CV.
+7. Identify software/tools actually mentioned in the CV.
+8. Match required keywords against the actual CV.
+9. Put matched keywords in required_keywords_found.
+10. Put missing keywords in required_keywords_missing.
+11. Identify evidence supporting relevant experience.
+12. If information is unavailable, use "Not specified".
+13. years_relevant_experience must be a number.
+14. Return ONLY ONE JSON OBJECT.
+15. Do NOT use Markdown.
+16. Do NOT use ```json.
+17. Do NOT include explanations outside JSON.
 
 Use EXACTLY this structure:
 
@@ -473,8 +606,8 @@ Return the JSON object now.
                 "role": "system",
                 "content": (
                     "You are HireTech AI. "
-                    "You analyze CVs accurately. "
-                    "Return one valid JSON object only."
+                    "Analyze CVs accurately and "
+                    "return one JSON object only."
                 )
             },
             {
@@ -490,7 +623,7 @@ Return the JSON object now.
 
 
 # ============================================================
-# EXPERIENCE SCORE
+# SCORING FUNCTIONS
 # ============================================================
 
 def calculate_experience_score(
@@ -534,10 +667,6 @@ def calculate_experience_score(
         return 0
 
 
-# ============================================================
-# TECHNICAL SKILLS SCORE
-# ============================================================
-
 def calculate_technical_score(
     candidate,
     required_keywords
@@ -575,10 +704,6 @@ def calculate_technical_score(
         * 100
     )
 
-
-# ============================================================
-# EDUCATION SCORE
-# ============================================================
 
 def calculate_education_score(
     education
@@ -640,10 +765,6 @@ def calculate_education_score(
     return score
 
 
-# ============================================================
-# JOB REQUIREMENT SCORE
-# ============================================================
-
 def calculate_requirement_score(
     candidate,
     required_keywords
@@ -678,10 +799,6 @@ def calculate_requirement_score(
     )
 
 
-# ============================================================
-# CERTIFICATION SCORE
-# ============================================================
-
 def calculate_certification_score(
     certifications
 ):
@@ -700,7 +817,7 @@ def calculate_certification_score(
 
 
 # ============================================================
-# OVERALL SCORE
+# OVERALL SCORING
 # ============================================================
 
 def calculate_overall_score(
@@ -756,11 +873,11 @@ def calculate_overall_score(
         weights.values()
     )
 
-    if total_weight == 0:
+    if total_weight <= 0:
 
         total_weight = 100
 
-    # Normalize weights
+    # Automatically normalize weights
     experience_w = (
         weights["experience"]
         / total_weight
@@ -845,13 +962,52 @@ def calculate_overall_score(
 
 
 # ============================================================
-# ANALYZE BUTTON
+# RECALCULATE ALL SCORES
 # ============================================================
 
-st.header("3️⃣ Analyze Candidates")
+def recalculate_results(
+    candidates,
+    required_keywords,
+    minimum_experience,
+    weights
+):
+
+    updated_results = []
+
+    for candidate in candidates:
+
+        candidate_copy = candidate.copy()
+
+        scores = calculate_overall_score(
+
+            candidate_copy,
+
+            required_keywords,
+
+            minimum_experience,
+
+            weights
+        )
+
+        candidate_copy.update(
+            scores
+        )
+
+        updated_results.append(
+            candidate_copy
+        )
+
+    return updated_results
+
+
+# ============================================================
+# ANALYZE CV BUTTON
+# ============================================================
+
+st.header("3️⃣ AI Candidate Analysis")
 
 analyze_button = st.button(
-    "🚀 Analyze & Rank Candidates",
+    "🚀 Analyze CVs with HireTech AI",
     type="primary",
     use_container_width=True
 )
@@ -866,7 +1022,7 @@ if analyze_button:
     if not groq_api_key:
 
         st.error(
-            "Please enter your Groq API key in the sidebar."
+            "Please enter your Groq API key."
         )
 
         st.stop()
@@ -882,7 +1038,7 @@ if analyze_button:
     if not job_description.strip():
 
         st.error(
-            "Please enter a job description."
+            "Please enter the job description."
         )
 
         st.stop()
@@ -906,8 +1062,154 @@ if analyze_button:
         st.stop()
 
     # --------------------------------------------------------
-    # WEIGHTS
+    # ANALYZE CVs
     # --------------------------------------------------------
+
+    new_candidates = []
+
+    errors = []
+
+    progress_bar = st.progress(0)
+
+    status_text = st.empty()
+
+    for index, uploaded_file in enumerate(
+        uploaded_files
+    ):
+
+        filename = uploaded_file.name
+
+        status_text.write(
+            f"🔄 Analyzing **{filename}**..."
+        )
+
+        try:
+
+            # Extract text
+            cv_text = extract_cv_text(
+                uploaded_file
+            )
+
+            if not cv_text.strip():
+
+                raise ValueError(
+                    "No readable text found. "
+                    "This may be a scanned PDF."
+                )
+
+            # Call AI ONCE
+            ai_result = analyze_candidate(
+
+                client,
+
+                model_name,
+
+                cv_text,
+
+                job_title,
+
+                job_description,
+
+                required_keywords,
+
+                minimum_experience
+            )
+
+            # Parse JSON
+            candidate = parse_ai_json(
+
+                client,
+
+                model_name,
+
+                ai_result
+            )
+
+            # Store filename
+            candidate["filename"] = filename
+
+            # Store candidate data
+            new_candidates.append(
+                candidate
+            )
+
+        except Exception as e:
+
+            error_message = (
+                f"{filename}: {str(e)}"
+            )
+
+            errors.append(
+                error_message
+            )
+
+            st.warning(
+                f"⚠️ Could not process "
+                f"{filename}: {str(e)}"
+            )
+
+        progress_bar.progress(
+            (index + 1)
+            / len(uploaded_files)
+        )
+
+    # --------------------------------------------------------
+    # SAVE RAW AI RESULTS
+    # --------------------------------------------------------
+
+    st.session_state.candidate_data = (
+        new_candidates
+    )
+
+    st.session_state.analysis_errors = (
+        errors
+    )
+
+    st.session_state.processed = True
+
+    status_text.write(
+        "✅ AI analysis completed."
+    )
+
+    # --------------------------------------------------------
+    # SUCCESS MESSAGE
+    # --------------------------------------------------------
+
+    if new_candidates:
+
+        st.success(
+            f"Successfully analyzed "
+            f"{len(new_candidates)} CV(s)."
+        )
+
+    if errors:
+
+        st.warning(
+            f"{len(errors)} CV(s) could not be processed."
+        )
+
+
+# ============================================================
+# DISPLAY RESULTS
+# ============================================================
+
+if st.session_state.processed:
+
+    raw_candidates = (
+        st.session_state.candidate_data
+    )
+
+    if not raw_candidates:
+
+        st.error(
+            "No candidates were successfully analyzed."
+        )
+
+        st.stop()
+
+    # ========================================================
+    # CURRENT WEIGHTS
+    # ========================================================
 
     weights = {
 
@@ -927,151 +1229,23 @@ if analyze_button:
             certification_weight
     }
 
-    results = []
+    # ========================================================
+    # RECALCULATE SCORES
+    # ========================================================
 
-    progress_bar = st.progress(0)
+    results = recalculate_results(
 
-    status_text = st.empty()
+        raw_candidates,
 
-    # --------------------------------------------------------
-    # PROCESS EACH CV
-    # --------------------------------------------------------
+        required_keywords,
 
-    for index, uploaded_file in enumerate(
-        uploaded_files
-    ):
+        minimum_experience,
 
-        filename = uploaded_file.name
-
-        status_text.write(
-            f"🔄 Analyzing **{filename}**..."
-        )
-
-        try:
-
-            # Extract CV
-            cv_text = extract_cv_text(
-                uploaded_file
-            )
-
-            if not cv_text.strip():
-
-                raise ValueError(
-                    "No readable text found in CV. "
-                    "The PDF may be scanned/image-based."
-                )
-
-            # AI analysis
-            ai_result = analyze_candidate(
-
-                client,
-
-                model_name,
-
-                cv_text,
-
-                job_title,
-
-                job_description,
-
-                required_keywords,
-
-                minimum_experience
-            )
-
-            # Debug information is hidden
-            # unless an error occurs.
-
-            # Clean JSON
-            cleaned_result = (
-                clean_json_response(
-                    ai_result
-                )
-            )
-
-            # Convert JSON to Python dictionary
-            candidate = json.loads(
-                cleaned_result
-            )
-
-            # Calculate scores
-            scores = (
-                calculate_overall_score(
-
-                    candidate,
-
-                    required_keywords,
-
-                    minimum_experience,
-
-                    weights
-                )
-            )
-
-            # Store filename
-            candidate["filename"] = filename
-
-            # Add scores
-            candidate.update(
-                scores
-            )
-
-            # Store result
-            results.append(
-                candidate
-            )
-
-        except Exception as e:
-
-            st.error(
-                f"Could not process "
-                f"{filename}: {str(e)}"
-            )
-
-            # Show AI response for debugging
-            if "ai_result" in locals():
-
-                with st.expander(
-                    f"🔧 Debug response - {filename}"
-                ):
-
-                    st.code(
-                        str(ai_result)
-                    )
-
-        progress_bar.progress(
-            (index + 1)
-            / len(uploaded_files)
-        )
-
-    status_text.write(
-        "✅ Candidate analysis completed."
+        weights
     )
 
-    # Save results
-    st.session_state.results = results
-
-    st.session_state.processed = True
-
-
-# ============================================================
-# DISPLAY RESULTS
-# ============================================================
-
-if st.session_state.processed:
-
-    results = st.session_state.results
-
-    if not results:
-
-        st.error(
-            "No candidates were successfully processed."
-        )
-
-        st.stop()
-
     # ========================================================
-    # CREATE RANKING DATA
+    # RANK CANDIDATES
     # ========================================================
 
     ranking_data = []
@@ -1155,7 +1329,6 @@ if st.session_state.processed:
         ranking_data
     )
 
-    # Sort by score
     ranking_df = ranking_df.sort_values(
         by="Overall Score",
         ascending=False
@@ -1163,7 +1336,6 @@ if st.session_state.processed:
         drop=True
     )
 
-    # Add ranking
     ranking_df.insert(
         0,
         "Rank",
@@ -1177,7 +1349,9 @@ if st.session_state.processed:
     # DASHBOARD
     # ========================================================
 
-    st.header("4️⃣ Candidate Ranking Dashboard")
+    st.header(
+        "4️⃣ Candidate Ranking Dashboard"
+    )
 
     col1, col2, col3, col4 = st.columns(4)
 
@@ -1251,34 +1425,29 @@ if st.session_state.processed:
     # ========================================================
 
     st.subheader(
-        "🔎 Detailed Candidate Analysis"
+        "5️⃣ Detailed Candidate Analysis"
     )
 
     candidate_options = []
 
     for candidate in results:
 
-        name = candidate.get(
-            "candidate_name",
-            "Not specified"
-        )
-
-        filename = candidate.get(
-            "filename",
-            ""
-        )
-
         candidate_options.append(
-            f"{name} — {filename}"
+
+            f"{candidate.get('candidate_name', 'Not specified')}"
+            f" — "
+            f"{candidate.get('filename', '')}"
         )
 
     selected_option = st.selectbox(
-        "Select candidate",
+        "Select a candidate",
         candidate_options
     )
 
-    selected_index = candidate_options.index(
-        selected_option
+    selected_index = (
+        candidate_options.index(
+            selected_option
+        )
     )
 
     selected = results[
@@ -1290,7 +1459,8 @@ if st.session_state.processed:
     # ========================================================
 
     st.markdown(
-        f"### 👤 {selected.get('candidate_name', 'Not specified')}"
+        f"### 👤 "
+        f"{selected.get('candidate_name', 'Not specified')}"
     )
 
     st.caption(
@@ -1386,7 +1556,7 @@ if st.session_state.processed:
     )
 
     # ========================================================
-    # EDUCATION AND SKILLS
+    # EDUCATION / SKILLS
     # ========================================================
 
     col1, col2 = st.columns(2)
@@ -1463,7 +1633,7 @@ if st.session_state.processed:
             )
 
     # ========================================================
-    # REQUIREMENTS AND CERTIFICATIONS
+    # CERTIFICATIONS / REQUIREMENTS
     # ========================================================
 
     with col2:
@@ -1538,7 +1708,7 @@ if st.session_state.processed:
             )
 
     # ========================================================
-    # PREVIOUS EXPERIENCE
+    # PREVIOUS ROLES
     # ========================================================
 
     st.markdown(
@@ -1592,7 +1762,7 @@ if st.session_state.processed:
         )
 
     # ========================================================
-    # STRENGTHS AND GAPS
+    # STRENGTHS / GAPS
     # ========================================================
 
     col1, col2 = st.columns(2)
@@ -1648,11 +1818,11 @@ if st.session_state.processed:
             )
 
     # ========================================================
-    # EXCEL EXPORT
+    # EXPORT TO EXCEL
     # ========================================================
 
-    st.subheader(
-        "5️⃣ Export Recruitment Report"
+    st.header(
+        "6️⃣ Export Recruitment Report"
     )
 
     excel_buffer = io.BytesIO()
