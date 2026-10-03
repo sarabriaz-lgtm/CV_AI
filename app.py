@@ -40,27 +40,6 @@ st.markdown("""
     margin-bottom: 25px;
 }
 
-.metric-card {
-    padding: 20px;
-    border-radius: 12px;
-    background-color: #f7f9fc;
-    border: 1px solid #e2e8f0;
-    text-align: center;
-}
-
-.candidate-card {
-    padding: 18px;
-    border-radius: 12px;
-    background-color: #f8fafc;
-    border: 1px solid #e2e8f0;
-    margin-bottom: 15px;
-}
-
-.small-text {
-    font-size: 14px;
-    color: #666666;
-}
-
 </style>
 """, unsafe_allow_html=True)
 
@@ -99,7 +78,7 @@ if "processed" not in st.session_state:
 
 with st.sidebar:
 
-    st.header("⚙️ Configuration")
+    st.header("⚙️ HireTech AI Settings")
 
     groq_api_key = st.text_input(
         "Groq API Key",
@@ -163,18 +142,16 @@ with st.sidebar:
         + certification_weight
     )
 
-    if total_weight != 100:
-
-        st.warning(
-            f"Total weight = {total_weight}%. "
-            "Weights should ideally total 100%."
-        )
+    st.info(
+        f"Total scoring weight: {total_weight}%"
+    )
 
     st.divider()
 
     st.caption(
-        "HireTech AI provides AI-assisted candidate screening. "
-        "Final recruitment decisions should be reviewed by HR professionals."
+        "HireTech AI is an AI-assisted recruitment "
+        "screening tool. Final recruitment decisions "
+        "should be reviewed by qualified HR personnel."
     )
 
 
@@ -205,10 +182,11 @@ with col2:
 
     job_description = st.text_area(
         "Job Description / Requirements",
-        height=220,
+        height=230,
         value="""We are looking for a Hydrologist for a water resources engineering position.
 
 The candidate should have experience in:
+
 - Hydrological modelling
 - Flood modelling
 - HEC-HMS
@@ -219,19 +197,24 @@ The candidate should have experience in:
 - Hydrological data analysis
 
 Educational requirement:
+
 Bachelor's degree in Civil Engineering, Water Resources Engineering,
-Hydrology, Hydraulics, Environmental Engineering or related field.
+Hydrology, Hydraulics, Environmental Engineering or a related field.
 
 Preferred:
+
 Master's degree in Water Resources Engineering, Hydrology,
-Hydraulics or related field."""
+Hydraulics or a related field."""
     )
 
 
 required_keywords_text = st.text_input(
     "Required Keywords",
-    value="HEC-HMS, HEC-RAS, Hydrology, Flood modelling, GIS, Rainfall-runoff, Flood frequency analysis, Civil Engineering",
-    help="Separate keywords with commas."
+    value=(
+        "HEC-HMS, HEC-RAS, Hydrology, Flood modelling, GIS, "
+        "Rainfall-runoff, Flood frequency analysis, Civil Engineering"
+    ),
+    help="Enter keywords separated by commas."
 )
 
 required_keywords = [
@@ -251,7 +234,7 @@ uploaded_files = st.file_uploader(
     "Upload PDF or Word CVs",
     type=["pdf", "docx"],
     accept_multiple_files=True,
-    help="You can upload multiple candidate CVs."
+    help="Upload multiple candidate CVs for analysis."
 )
 
 if uploaded_files:
@@ -275,7 +258,7 @@ if uploaded_files:
 
 
 # ============================================================
-# TEXT EXTRACTION FUNCTIONS
+# PDF TEXT EXTRACTION
 # ============================================================
 
 def extract_pdf_text(file):
@@ -294,13 +277,17 @@ def extract_pdf_text(file):
     return text
 
 
+# ============================================================
+# DOCX TEXT EXTRACTION
+# ============================================================
+
 def extract_docx_text(file):
 
     doc = Document(file)
 
     text = []
 
-    # Paragraphs
+    # Normal paragraphs
     for paragraph in doc.paragraphs:
 
         if paragraph.text.strip():
@@ -333,6 +320,10 @@ def extract_docx_text(file):
     return "\n".join(text)
 
 
+# ============================================================
+# UNIVERSAL CV TEXT EXTRACTION
+# ============================================================
+
 def extract_cv_text(file):
 
     filename = file.name.lower()
@@ -348,12 +339,13 @@ def extract_cv_text(file):
     else:
 
         raise ValueError(
-            "Only PDF and DOCX files are supported."
+            "Unsupported file type. "
+            "Only PDF and DOCX are supported."
         )
 
 
 # ============================================================
-# JSON CLEANING
+# CLEAN AI JSON RESPONSE
 # ============================================================
 
 def clean_json_response(response_text):
@@ -366,6 +358,7 @@ def clean_json_response(response_text):
 
     response_text = response_text.strip()
 
+    # Remove markdown JSON fences
     response_text = re.sub(
         r"```json",
         "",
@@ -381,8 +374,8 @@ def clean_json_response(response_text):
 
     response_text = response_text.strip()
 
+    # Locate JSON object
     start = response_text.find("{")
-
     end = response_text.rfind("}")
 
     if start == -1 or end == -1:
@@ -397,7 +390,7 @@ def clean_json_response(response_text):
 
 
 # ============================================================
-# AI CV ANALYSIS
+# AI CANDIDATE ANALYSIS
 # ============================================================
 
 def analyze_candidate(
@@ -406,11 +399,12 @@ def analyze_candidate(
     cv_text,
     job_title,
     job_description,
-    required_keywords
+    required_keywords,
+    minimum_experience
 ):
 
     prompt = f"""
-You are HireTech AI, an AI-powered HR recruitment assistant.
+You are HireTech AI, an AI-powered HR CV screening assistant.
 
 Analyze the candidate CV against the job requirements.
 
@@ -429,16 +423,28 @@ REQUIRED KEYWORDS:
 CANDIDATE CV:
 {cv_text}
 
-Return ONLY a valid JSON object.
+Your task is to extract factual information from the CV.
 
-Do not return:
-- Markdown
-- ```json
-- Explanations outside JSON
-- Comments
-- Extra text
+IMPORTANT RULES:
 
-Use exactly this structure:
+1. Use ONLY information contained in the CV.
+2. Do NOT invent information.
+3. Do NOT assume qualifications or experience.
+4. Estimate relevant experience only from documented employment history.
+5. Identify technical skills actually mentioned in the CV.
+6. Identify software/tools actually mentioned in the CV.
+7. Match required keywords against the actual CV.
+8. Put matched keywords in required_keywords_found.
+9. Put missing keywords in required_keywords_missing.
+10. Identify evidence supporting relevant experience.
+11. If information is unavailable, use "Not specified".
+12. years_relevant_experience must be a number.
+13. Return ONLY ONE JSON OBJECT.
+14. Do NOT use Markdown.
+15. Do NOT use ```json.
+16. Do NOT include explanations outside the JSON.
+
+Use EXACTLY this structure:
 
 {{
     "candidate_name": "Full name or Not specified",
@@ -455,18 +461,7 @@ Use exactly this structure:
     "potential_gaps": []
 }}
 
-IMPORTANT RULES:
-
-1. Extract information only from the CV.
-2. Do not invent information.
-3. Do not assume experience that is not stated.
-4. Estimate relevant experience from documented employment history.
-5. Match required keywords against the actual CV.
-6. Put matched keywords in required_keywords_found.
-7. Put missing keywords in required_keywords_missing.
-8. Identify relevant evidence from the candidate's experience.
-9. If information is unavailable, use "Not specified".
-10. Return valid JSON only.
+Return the JSON object now.
 """
 
     response = client.chat.completions.create(
@@ -476,9 +471,11 @@ IMPORTANT RULES:
         messages=[
             {
                 "role": "system",
-                "content":
-                "You are a precise HR CV analysis assistant. "
-                "Return only valid JSON."
+                "content": (
+                    "You are HireTech AI. "
+                    "You analyze CVs accurately. "
+                    "Return one valid JSON object only."
+                )
             },
             {
                 "role": "user",
@@ -486,18 +483,14 @@ IMPORTANT RULES:
             }
         ],
 
-        temperature=0,
-
-        response_format={
-            "type": "json_object"
-        }
+        temperature=0
     )
 
     return response.choices[0].message.content
 
 
 # ============================================================
-# SCORING FUNCTIONS
+# EXPERIENCE SCORE
 # ============================================================
 
 def calculate_experience_score(
@@ -541,6 +534,10 @@ def calculate_experience_score(
         return 0
 
 
+# ============================================================
+# TECHNICAL SKILLS SCORE
+# ============================================================
+
 def calculate_technical_score(
     candidate,
     required_keywords
@@ -557,6 +554,7 @@ def calculate_technical_score(
             "software_tools",
             []
         )
+
     ).lower()
 
     if not required_keywords:
@@ -577,6 +575,10 @@ def calculate_technical_score(
         * 100
     )
 
+
+# ============================================================
+# EDUCATION SCORE
+# ============================================================
 
 def calculate_education_score(
     education
@@ -638,6 +640,10 @@ def calculate_education_score(
     return score
 
 
+# ============================================================
+# JOB REQUIREMENT SCORE
+# ============================================================
+
 def calculate_requirement_score(
     candidate,
     required_keywords
@@ -672,6 +678,10 @@ def calculate_requirement_score(
     )
 
 
+# ============================================================
+# CERTIFICATION SCORE
+# ============================================================
+
 def calculate_certification_score(
     certifications
 ):
@@ -688,6 +698,10 @@ def calculate_certification_score(
 
     return 100
 
+
+# ============================================================
+# OVERALL SCORE
+# ============================================================
 
 def calculate_overall_score(
     candidate,
@@ -744,16 +758,9 @@ def calculate_overall_score(
 
     if total_weight == 0:
 
-        return {
-            "Experience Score": 0,
-            "Technical Skills Score": 0,
-            "Education Score": 0,
-            "Job Requirements Score": 0,
-            "Certification Score": 0,
-            "Overall Score": 0
-        }
+        total_weight = 100
 
-    # Normalize weights if user changes them
+    # Normalize weights
     experience_w = (
         weights["experience"]
         / total_weight
@@ -838,7 +845,7 @@ def calculate_overall_score(
 
 
 # ============================================================
-# RUN HIRETECH AI
+# ANALYZE BUTTON
 # ============================================================
 
 st.header("3️⃣ Analyze Candidates")
@@ -851,6 +858,10 @@ analyze_button = st.button(
 
 
 if analyze_button:
+
+    # --------------------------------------------------------
+    # VALIDATION
+    # --------------------------------------------------------
 
     if not groq_api_key:
 
@@ -876,6 +887,10 @@ if analyze_button:
 
         st.stop()
 
+    # --------------------------------------------------------
+    # INITIALIZE GROQ
+    # --------------------------------------------------------
+
     try:
 
         client = Groq(
@@ -889,6 +904,10 @@ if analyze_button:
         )
 
         st.stop()
+
+    # --------------------------------------------------------
+    # WEIGHTS
+    # --------------------------------------------------------
 
     weights = {
 
@@ -914,6 +933,10 @@ if analyze_button:
 
     status_text = st.empty()
 
+    # --------------------------------------------------------
+    # PROCESS EACH CV
+    # --------------------------------------------------------
+
     for index, uploaded_file in enumerate(
         uploaded_files
     ):
@@ -921,12 +944,12 @@ if analyze_button:
         filename = uploaded_file.name
 
         status_text.write(
-            f"🔄 Analyzing: **{filename}**"
+            f"🔄 Analyzing **{filename}**..."
         )
 
         try:
 
-            # Extract CV text
+            # Extract CV
             cv_text = extract_cv_text(
                 uploaded_file
             )
@@ -934,7 +957,8 @@ if analyze_button:
             if not cv_text.strip():
 
                 raise ValueError(
-                    "No readable text found in CV."
+                    "No readable text found in CV. "
+                    "The PDF may be scanned/image-based."
                 )
 
             # AI analysis
@@ -950,17 +974,22 @@ if analyze_button:
 
                 job_description,
 
-                required_keywords
+                required_keywords,
+
+                minimum_experience
             )
 
-            # Clean response
+            # Debug information is hidden
+            # unless an error occurs.
+
+            # Clean JSON
             cleaned_result = (
                 clean_json_response(
                     ai_result
                 )
             )
 
-            # Convert to dictionary
+            # Convert JSON to Python dictionary
             candidate = json.loads(
                 cleaned_result
             )
@@ -979,22 +1008,36 @@ if analyze_button:
                 )
             )
 
+            # Store filename
             candidate["filename"] = filename
 
+            # Add scores
             candidate.update(
                 scores
             )
 
+            # Store result
             results.append(
                 candidate
             )
 
         except Exception as e:
 
-            st.warning(
+            st.error(
                 f"Could not process "
                 f"{filename}: {str(e)}"
             )
+
+            # Show AI response for debugging
+            if "ai_result" in locals():
+
+                with st.expander(
+                    f"🔧 Debug response - {filename}"
+                ):
+
+                    st.code(
+                        str(ai_result)
+                    )
 
         progress_bar.progress(
             (index + 1)
@@ -1002,16 +1045,17 @@ if analyze_button:
         )
 
     status_text.write(
-        "✅ Analysis completed."
+        "✅ Candidate analysis completed."
     )
 
+    # Save results
     st.session_state.results = results
 
     st.session_state.processed = True
 
 
 # ============================================================
-# RESULTS
+# DISPLAY RESULTS
 # ============================================================
 
 if st.session_state.processed:
@@ -1027,7 +1071,7 @@ if st.session_state.processed:
         st.stop()
 
     # ========================================================
-    # CREATE RANKING DATAFRAME
+    # CREATE RANKING DATA
     # ========================================================
 
     ranking_data = []
@@ -1111,6 +1155,7 @@ if st.session_state.processed:
         ranking_data
     )
 
+    # Sort by score
     ranking_df = ranking_df.sort_values(
         by="Overall Score",
         ascending=False
@@ -1118,6 +1163,7 @@ if st.session_state.processed:
         drop=True
     )
 
+    # Add ranking
     ranking_df.insert(
         0,
         "Rank",
@@ -1128,17 +1174,17 @@ if st.session_state.processed:
     )
 
     # ========================================================
-    # SUMMARY METRICS
+    # DASHBOARD
     # ========================================================
 
-    st.header("4️⃣ Candidate Analysis")
+    st.header("4️⃣ Candidate Ranking Dashboard")
 
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
 
         st.metric(
-            "Candidates",
+            "Candidates Analyzed",
             len(results)
         )
 
@@ -1159,7 +1205,7 @@ if st.session_state.processed:
     with col4:
 
         st.metric(
-            "Job Keywords",
+            "Required Keywords",
             len(required_keywords)
         )
 
@@ -1205,40 +1251,39 @@ if st.session_state.processed:
     # ========================================================
 
     st.subheader(
-        "🔎 Candidate Details"
+        "🔎 Detailed Candidate Analysis"
     )
 
-    candidate_names = [
+    candidate_options = []
 
-        candidate.get(
+    for candidate in results:
+
+        name = candidate.get(
             "candidate_name",
-            candidate.get(
-                "filename",
-                "Candidate"
-            )
+            "Not specified"
         )
 
-        for candidate in results
+        filename = candidate.get(
+            "filename",
+            ""
+        )
+
+        candidate_options.append(
+            f"{name} — {filename}"
+        )
+
+    selected_option = st.selectbox(
+        "Select candidate",
+        candidate_options
+    )
+
+    selected_index = candidate_options.index(
+        selected_option
+    )
+
+    selected = results[
+        selected_index
     ]
-
-    selected_candidate = st.selectbox(
-        "Select a candidate",
-        candidate_names
-    )
-
-    selected = next(
-
-        candidate
-        for candidate in results
-
-        if candidate.get(
-            "candidate_name",
-            candidate.get(
-                "filename",
-                "Candidate"
-            )
-        ) == selected_candidate
-    )
 
     # ========================================================
     # CANDIDATE HEADER
@@ -1264,7 +1309,7 @@ if st.session_state.processed:
     with col2:
 
         st.metric(
-            "Experience",
+            "Relevant Experience",
             f"{selected.get('years_relevant_experience', 0)} years"
         )
 
@@ -1285,16 +1330,21 @@ if st.session_state.processed:
     # ========================================================
 
     st.markdown(
-        "#### Score Breakdown"
+        "#### 📊 Score Breakdown"
     )
 
     score_data = pd.DataFrame({
 
         "Category": [
+
             "Experience",
+
             "Technical Skills",
+
             "Education",
+
             "Job Requirements",
+
             "Certifications"
         ],
 
@@ -1336,7 +1386,7 @@ if st.session_state.processed:
     )
 
     # ========================================================
-    # CANDIDATE INFORMATION
+    # EDUCATION AND SKILLS
     # ========================================================
 
     col1, col2 = st.columns(2)
@@ -1347,40 +1397,74 @@ if st.session_state.processed:
             "#### 🎓 Education"
         )
 
-        for item in selected.get(
+        education = selected.get(
             "education",
             []
-        ):
+        )
+
+        if education:
+
+            for item in education:
+
+                st.write(
+                    f"• {item}"
+                )
+
+        else:
 
             st.write(
-                f"• {item}"
+                "Not specified"
             )
 
         st.markdown(
             "#### 💻 Technical Skills"
         )
 
-        for item in selected.get(
+        skills = selected.get(
             "technical_skills",
             []
-        ):
+        )
+
+        if skills:
+
+            for item in skills:
+
+                st.write(
+                    f"• {item}"
+                )
+
+        else:
 
             st.write(
-                f"• {item}"
+                "Not specified"
             )
 
         st.markdown(
             "#### 🛠 Software Tools"
         )
 
-        for item in selected.get(
+        tools = selected.get(
             "software_tools",
             []
-        ):
+        )
+
+        if tools:
+
+            for item in tools:
+
+                st.write(
+                    f"• {item}"
+                )
+
+        else:
 
             st.write(
-                f"• {item}"
+                "Not specified"
             )
+
+    # ========================================================
+    # REQUIREMENTS AND CERTIFICATIONS
+    # ========================================================
 
     with col2:
 
@@ -1388,69 +1472,123 @@ if st.session_state.processed:
             "#### 📜 Certifications"
         )
 
-        for item in selected.get(
+        certifications = selected.get(
             "certifications",
             []
-        ):
+        )
+
+        if certifications:
+
+            for item in certifications:
+
+                st.write(
+                    f"• {item}"
+                )
+
+        else:
 
             st.write(
-                f"• {item}"
+                "Not specified"
             )
 
         st.markdown(
             "#### ✅ Matched Requirements"
         )
 
-        for item in selected.get(
+        matched = selected.get(
             "required_keywords_found",
             []
-        ):
+        )
 
-            st.success(
-                item
+        if matched:
+
+            for item in matched:
+
+                st.success(
+                    item
+                )
+
+        else:
+
+            st.write(
+                "No matched keywords identified."
             )
 
         st.markdown(
             "#### ⚠️ Missing Requirements"
         )
 
-        for item in selected.get(
+        missing = selected.get(
             "required_keywords_missing",
             []
-        ):
+        )
 
-            st.warning(
-                item
+        if missing:
+
+            for item in missing:
+
+                st.warning(
+                    item
+                )
+
+        else:
+
+            st.write(
+                "No missing keywords identified."
             )
 
     # ========================================================
-    # EXPERIENCE
+    # PREVIOUS EXPERIENCE
     # ========================================================
 
     st.markdown(
         "#### 💼 Previous Roles"
     )
 
-    for item in selected.get(
+    previous_roles = selected.get(
         "previous_roles",
         []
-    ):
+    )
+
+    if previous_roles:
+
+        for item in previous_roles:
+
+            st.write(
+                f"• {item}"
+            )
+
+    else:
 
         st.write(
-            f"• {item}"
+            "Not specified"
         )
+
+    # ========================================================
+    # EXPERIENCE EVIDENCE
+    # ========================================================
 
     st.markdown(
         "#### 📌 Relevant Experience Evidence"
     )
 
-    for item in selected.get(
+    evidence = selected.get(
         "relevant_experience_evidence",
         []
-    ):
+    )
 
-        st.info(
-            item
+    if evidence:
+
+        for item in evidence:
+
+            st.info(
+                item
+            )
+
+    else:
+
+        st.write(
+            "No specific evidence identified."
         )
 
     # ========================================================
@@ -1465,13 +1603,23 @@ if st.session_state.processed:
             "#### 💪 Candidate Strengths"
         )
 
-        for item in selected.get(
+        strengths = selected.get(
             "strengths",
             []
-        ):
+        )
 
-            st.success(
-                item
+        if strengths:
+
+            for item in strengths:
+
+                st.success(
+                    item
+                )
+
+        else:
+
+            st.write(
+                "No specific strengths identified."
             )
 
     with col2:
@@ -1480,21 +1628,31 @@ if st.session_state.processed:
             "#### 🔍 Potential Gaps"
         )
 
-        for item in selected.get(
+        gaps = selected.get(
             "potential_gaps",
             []
-        ):
+        )
 
-            st.warning(
-                item
+        if gaps:
+
+            for item in gaps:
+
+                st.warning(
+                    item
+                )
+
+        else:
+
+            st.write(
+                "No specific gaps identified."
             )
 
     # ========================================================
-    # EXCEL DOWNLOAD
+    # EXCEL EXPORT
     # ========================================================
 
     st.subheader(
-        "📥 Export Results"
+        "5️⃣ Export Recruitment Report"
     )
 
     excel_buffer = io.BytesIO()
@@ -1504,12 +1662,14 @@ if st.session_state.processed:
         engine="openpyxl"
     ) as writer:
 
+        # Ranking sheet
         ranking_df.to_excel(
             writer,
             index=False,
             sheet_name="Candidate Ranking"
         )
 
+        # Detailed sheet
         detailed_data = []
 
         for candidate in results:
@@ -1643,7 +1803,7 @@ if st.session_state.processed:
 
     st.download_button(
 
-        label="📥 Download Excel Report",
+        label="📥 Download Excel Recruitment Report",
 
         data=excel_buffer,
 
